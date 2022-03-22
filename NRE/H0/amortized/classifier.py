@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 
 
-class DeepSets_Amortized(nn.Module):
+class DeepSets(nn.Module):
     def __init__(self, nfeat=32, p_drop=0):
-        super(DeepSets_Amortized, self).__init__()
+        super(DeepSets, self).__init__()
 
         self.nfeat = nfeat
 
@@ -64,9 +64,9 @@ class DeepSets_Amortized(nn.Module):
         return x
 
 
-class DeepSets(nn.Module):
+class DeepSets1(nn.Module):
     def __init__(self, nfeat=16, p_drop=0):
-        super(DeepSets, self).__init__()
+        super(DeepSets1, self).__init__()
 
         self.nfeat = nfeat
 

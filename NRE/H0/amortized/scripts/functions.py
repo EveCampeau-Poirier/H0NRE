@@ -102,9 +102,10 @@ def index_probe(theta, labels, probe, dependence=True):
     Outputs
         idx : (int) index
     """
-    if dependence == True:
+    if dependence:
         ids = torch.nonzero(labels)
-    else : ids = torch.nonzero(labels-1)
+    else:
+        ids = torch.nonzero(labels-1)
     class_val = theta[ids]
     id_class = find_index(class_val, probe)
     idx = ids[id_class]
@@ -123,14 +124,16 @@ def make_sets(x1, x2, save=False, file_name=""):
         x2 : (tensor) [nexamp x 1] H_0 tensor
         y : (tensor) [nexamp x 1] label tensor
     """
-    if save == True :
+    if save :
         if os.path.isfile(file_name):
             os.remove(file_name)
         nsamp = x1.shape[0]
         file = h5py.File(file_name, 'a')
         dt_set = file.create_dataset("time_delays", (nsamp, 4), dtype='f')
         H0_set = file.create_dataset("Hubble_cst", (nsamp, 1), dtype='f')
-        dt_set[:,:] = x1
+        pot_set = file.create_dataset("Fermat_potential", (nsamp, 1), dtype='f')
+        dt_set[:,:] = x1[:,:,0]
+        pot_set[:,:] = x1[:,:,1]
         H0_set[:,:] = x2
         file.close()
     
@@ -162,25 +165,30 @@ def split_data(file, path_in):
         valid_set : (list) validation set. Corresponds to 20% of all data.
         test_set : (list) test set. Corresponds to 20% of all data.
     """
-    dataset = h5py.File(os.path.join(path_in,file), 'r')
+    dataset = h5py.File(os.path.join(path_in, file), 'r')
     
     # Time delays
     dt = dataset["time_delays"][:]
+
+    # Fermat potential
+    pot = dataset["Fermat_potential"][:]
     
     # Hubble constant
     H0 = dataset["Hubble_cst"][:]
     
     # close files
     dataset.close()
+
+    images = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     
     # Splitting training and test sets
-    x1_train, x1_test, x2_train, x2_test = train_test_split(dt, H0, test_size=0.20, random_state=11)
+    x1_train, x1_test, x2_train, x2_test = train_test_split(images, H0, test_size=0.20, random_state=11)
 
     # Test set in torch format
-    x1_test, x2_test, y_test = make_sets(x1_test, x2_test, save=True, file_name=os.path.join(path_in,"test_set.hdf5"))
+    x1_test, x2_test, y_test = make_sets(x1_test, x2_test, save=True, file_name=os.path.join(path_in, "test_set.hdf5"))
     
     # Splitting training and validation sets
-    x1_train, x1_val, x2_train, x2_val= train_test_split(x1_train, x2_train, test_size=0.25, random_state=11)
+    x1_train, x1_val, x2_train, x2_val = train_test_split(x1_train, x2_train, test_size=0.25, random_state=11)
 
     # Training set in torch format
     x1_train, x2_train, y_train = make_sets(x1_train, x2_train)
@@ -228,11 +236,11 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
     train_set, valid_set, test_set = split_data(file, path_in)
     x1_train, x2_train, y_train = train_set
     x1_val, x2_val, y_val = valid_set
-    x1_test, x2_test, y_test = test_set
     
     dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train, y_train)
     dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val, y_val)
-                       
+
+    # probe indices
     idx_dep_train = index_probe(x2_train, y_train, probe)
     idx_ind_train = index_probe(x2_train, y_train, probe, dependence=False)
     idx_train = [int(idx_dep_train), int(idx_ind_train)]
@@ -268,7 +276,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
         print('-' * 10)
         
         # loop on validation and training phases
-        for phase in ['valid','train']:
+        for phase in ['valid', 'train']:
             if phase == 'train':
                 model.train(True)  # training
                 dataloader = torch.utils.data.DataLoader(dataset_train, batch_size=batch_size)
@@ -297,11 +305,11 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                     for param in model.parameters():
                         param.grad = None
                     
-                    if anomaly_detection == True :
+                    if anomaly_detection:
                         with autograd.detect_anomaly():
                             y_hat = model(x1, x2)
                             loss = loss_fn(y_hat, y.long())
-                    else :
+                    else:
                         y_hat = model(x1, x2)
                         loss = loss_fn(y_hat, y.long())
                     
@@ -319,11 +327,10 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                         y_hat = model(x1, x2)
                         loss = loss_fn(y_hat, y.long())
                 
-                
                 # accuracy evaluation
                 acc = acc_fn(y_hat, y)
                 
-                # update cummulative values
+                # update cumulative values
                 running_acc += acc*dataloader.batch_size
                 running_loss += loss*dataloader.batch_size
                 
@@ -337,22 +344,22 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
             epoch_loss = running_loss / len(dataloader.dataset)
             epoch_acc = running_acc / len(dataloader.dataset)
             epoch_lr = r_estimator(model, x1_probe, x2_probe)
-            			
+
             # print means
             print(f'{phase} Loss: {float(epoch_loss):.4e} // Acc: {float(epoch_acc):.4e}')
             
             # append means to lists
-            if phase=='train':
-                train_loss[epoch,:] = epoch_loss.detach().cpu().numpy()
-                train_acc[epoch,:] = epoch_acc.detach().cpu().numpy()
-                train_lr[epoch,:] = epoch_lr
-                if sched is not None :
+            if phase == 'train':
+                train_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
+                train_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
+                train_lr[epoch, :] = epoch_lr
+                if sched is not None:
                     sched.step()
-            else :
-                valid_loss[epoch,:] = epoch_loss.detach().cpu().numpy()
-                valid_acc[epoch,:] = epoch_acc.detach().cpu().numpy()
-                valid_lr[epoch,:] = epoch_lr
-        		
+            else:
+                valid_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
+                valid_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
+                valid_lr[epoch, :] = epoch_lr
+
         # Keeping track of the model
         if epoch % int(epochs/10) == 0:
             torch.save(model, path_out+f'/models/model{epoch:02d}.pt')
@@ -379,7 +386,7 @@ def plot_results(file, path_out):
     valid_lr = data["validation/likelihood_ratio"][:]
     data.close()
     
-    #loss
+    # loss
     plt.figure()
     plt.plot(train_loss, 'b', label='Training')
     plt.plot(valid_loss, 'r', label='Validation')
@@ -402,12 +409,12 @@ def plot_results(file, path_out):
     plt.savefig(path_out+'/acc.png', bbox_inches='tight')
     
     # Likelihood ratio
-    color = ["green","darkorange","lime","darkviolet","cyan",
-             "deeppink","darkblue","gold","maroon"]#"red","blue",
+    color = ["green", "darkorange", "lime", "darkviolet", "cyan",
+             "deeppink", "darkblue", "gold", "maroon"] # "red","blue",
     labels = ["dependent", "independent"]
     plt.figure()
     for i in range(train_lr.shape[1]):
-        plt.plot(train_lr[:,i], color=color[i], label=labels[i])
+        plt.plot(train_lr[:, i], color=color[i], label=labels[i])
     plt.xlabel("Epoch")
     plt.ylabel("Likelihood ratio estimation")
     plt.rcParams['axes.facecolor'] = 'white'
@@ -418,7 +425,7 @@ def plot_results(file, path_out):
 
     plt.figure()
     for i in range(valid_lr.shape[1]):
-        plt.plot(valid_lr[:,i], color=color[i], label=labels[i])
+        plt.plot(valid_lr[:, i], color=color[i], label=labels[i])
     plt.xlabel("Epoch")
     plt.ylabel("Likelihood ratio estimation")
     plt.rcParams['axes.facecolor'] = 'white'
@@ -428,46 +435,49 @@ def plot_results(file, path_out):
     plt.savefig(path_out+'/valid_lr.png', bbox_inches='tight')
 
     
-def inference(file_test, file_model, path_out, npost=20, nrow=5, ncol=4, npts=1000):
+def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     
     model = torch.load(file_model)
     
     test_set = h5py.File(file_test, 'r')
     time_delays = test_set["time_delays"][:]
+    fermat_pot = test_set["Fermat_potential"][:]
     H0 = test_set["Hubble_cst"][:]
     test_set.close()
-    
-    idx_up = np.where(H0>=75)[0]
-    idx_down = np.where(H0<=65)[0]
+
+    images = np.concatenate((time_delays[:, :, None], fermat_pot[:, :, None]), axis=2)
+
+    idx_up = np.where(H0 >= 75)[0]
+    idx_down = np.where(H0 <= 65)[0]
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
-    time_delays = np.delete(time_delays, idx_out, axis=0)
+    images = np.delete(images, idx_out, axis=0)
     
     prior = torch.linspace(65, 75, npts)
-    prior = prior.reshape(npts,1)
+    prior = prior.reshape(npts, 1)
     
-    it=0
-    fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3*ncol,3*nrow))
+    it = 0
+    fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3*ncol, 3*nrow))
     for i in range(nrow):
         for j in range(ncol):
-            dt = np.tile(time_delays[it], (npts,1))
-            dt = torch.from_numpy(dt)
-            ratios = r_estimator(model, dt, prior)
+            im = np.tile(images[it], (npts, 1, 1))
+            im = torch.from_numpy(im)
+            ratios = r_estimator(model, im, prior)
             
             true = float(H0[it])
             pred = float(prior[np.argmax(ratios)])
             
-            axes[i,j].plot(prior, ratios, 'b', label='{:.2f}'.format(pred))
-            axes[i,j].vlines(true, np.min(ratios), np.max(ratios), colors='r', label='{:.2f}'.format(true))
-            axes[i,j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            axes[i,j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
+            axes[i, j].plot(prior, ratios, 'b', label='{:.2f}'.format(pred))
+            axes[i, j].vlines(true, np.min(ratios), np.max(ratios), colors='r', label='{:.2f}'.format(true))
+            axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
+            axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
             
-            if i == int(nrow-1) :
-                axes[i,j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
-            if j == 0 :
-                axes[i,j].set_ylabel("Likelihood ratio")
+            if i == int(nrow-1):
+                axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
+            if j == 0:
+                axes[i, j].set_ylabel("Likelihood ratio")
             
-            it+=1
+            it += 1
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
     plt.savefig(path_out+'/posteriors.png', bbox_inches='tight')

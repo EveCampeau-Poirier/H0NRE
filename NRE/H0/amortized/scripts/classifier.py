@@ -9,37 +9,55 @@ class DeepSets(nn.Module):
         self.nfeat = nfeat
 
         self.encoder = nn.Sequential(
-            nn.Linear(1, int(nfeat / 8)),
+            nn.Linear(2, 64),
             nn.ReLU(),
-            nn.Linear(int(nfeat / 8), int(nfeat / 4)),
+            nn.Linear(64, 128),
             nn.ReLU(),
-            nn.Linear(int(nfeat / 4), int(nfeat / 2)),
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(int(nfeat / 2), nfeat)
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(nfeat, int(2 * nfeat)),
-            nn.ReLU(),
-            nn.Linear(int(2 * nfeat), int(4 * nfeat)),
-            nn.ReLU(),
-            nn.Linear(int(4 * nfeat), int(2 * nfeat)),
-            nn.ReLU(),
-            nn.Linear(int(2 * nfeat), 2)
+            nn.Linear(64, nfeat)
         )
 
-    def forward(self, x):
+        self.latent = nn.Sequential(
+            nn.Linear(1, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(nfeat + 1, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2)
+        )
+
+    def forward(self, x1, x2):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
+        # shape x1 : batch, 4, 2
+        dt = x1[:, :, 0]
+        pot = x1[:, :, 1]
         # Doubles and quads separation
-        count = torch.count_nonzero(x + 1, dim=1)
+        count = torch.count_nonzero(dt + 1, dim=1)
         ind2 = torch.where(count == 2)
         ind4 = torch.where(count == 4)
-        doubles = x[ind2][:, :2]
-        quads = x[ind4]
+        doubles = torch.cat((dt[ind2][:, :2, None], pot[ind2][:, :2, None]), dim=2)
+        quads = torch.cat((dt[ind4][:, :, None], pot[ind4][:, :, None]), dim=2)
 
         # Reshape to apply the encoder
-        doubles = doubles.reshape(2 * doubles.size(0), 1)
-        quads = quads.reshape(4 * quads.size(0), 1)
+        doubles = doubles.reshape(2 * doubles.size(0), 2)
+        quads = quads.reshape(4 * quads.size(0), 2)
 
         # Encoding
         doubles = self.encoder(doubles)
@@ -50,13 +68,19 @@ class DeepSets(nn.Module):
         quads = quads.view(-1, 4, self.nfeat)
 
         # Pooling over the time delays
-        doubles = torch.sum(doubles, dim=1)
-        quads = torch.sum(quads, dim=1)
+        doubles = torch.mean(doubles, dim=1)
+        quads = torch.mean(quads, dim=1)
 
         # Doubles and quads recombination
-        x = torch.zeros((x.size(0), self.nfeat), device=device)
+        x = torch.zeros((x1.size(0), self.nfeat), device=device, dtype=float)
         x[ind2] = doubles
         x[ind4] = quads
+
+        # Conditionning on latent variable
+        x2 = self.latent(x2)
+
+        # Decoder
+        x = torch.cat((x, x2), dim=1)
 
         # Decoding
         x = self.decoder(x)

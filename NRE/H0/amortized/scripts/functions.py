@@ -130,8 +130,8 @@ def make_sets(x1, x2, save=False, file_name=""):
         nsamp = x1.shape[0]
         file = h5py.File(file_name, 'a')
         dt_set = file.create_dataset("time_delays", (nsamp, 4), dtype='f')
+        pot_set = file.create_dataset("Fermat_potential", (nsamp, 4), dtype='f')
         H0_set = file.create_dataset("Hubble_cst", (nsamp, 1), dtype='f')
-        pot_set = file.create_dataset("Fermat_potential", (nsamp, 1), dtype='f')
         dt_set[:,:] = x1[:,:,0]
         pot_set[:,:] = x1[:,:,1]
         H0_set[:,:] = x2

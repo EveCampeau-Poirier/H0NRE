@@ -14,6 +14,8 @@ import torch
 from torch.nn.utils import clip_grad_norm_
 from torch import autograd
 
+np.random.seed(123)
+torch.manual_seed(123)
 
 # --- Functions for training -----------------------------------------------
 
@@ -43,10 +45,29 @@ def noise(x, expo_time=1000, sig_bg=.001):
         noisy_im : (tensor)[batch_size x nchan x npix x npix] noisy image
     """
     poisson = sig_bg * torch.randn(x.size())  # poisson noise
-    bckgrd = torch.sqrt(abs(x) / expo_time) * torch.randn(x.size())  # bakcground noise
+    bckgrd = torch.sqrt(abs(x) / expo_time) * torch.randn(x.size())  # background noise
     noisy_im = bckgrd + poisson + x
 
     return noisy_im
+
+def gaussian_noise(x, sigma=.15):
+    """
+    Adds noise to time delays
+    Inputs
+        x : (tensor)[batch_size x 4] images
+        sigma : (float) noise standard deviation
+    Outputs
+        noisy_data : (tensor)[batch_size x 4] noisy time delays
+    """
+    noise = sigma * torch.randn(x.size())
+    noisy_data = x + noise
+
+    return noisy_data
+
+def multi_gaussian(x, mu, sigma=.15, axis=-1):
+    size = np.prod(x.shape[1:])
+    lkh = np.exp(-np.sum((x - mu) ** 2, axis=axis) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size/2)
+    return lkh
 
 
 def r_estimator(model, x1, x2):
@@ -102,7 +123,7 @@ def index_probe(theta, labels, probe, dependence=True):
     Outputs
         idx : (int) index
     """
-    if dependence == True:
+    if dependence:
         ids = torch.nonzero(labels)
     else:
         ids = torch.nonzero(labels - 1)
@@ -124,7 +145,7 @@ def make_sets(x1, x2, save=False, file_name=""):
         x2 : (tensor) [nexamp x 1] H_0 tensor
         y : (tensor) [nexamp x 1] label tensor
     """
-    if save == True:
+    if save:
         if os.path.isfile(file_name):
             os.remove(file_name)
         nsamp = x1.shape[0]
@@ -175,7 +196,7 @@ def split_data(file, path_in):
     dataset.close()
 
     # Splitting training and test sets
-    x1_train, x1_test, x2_train, x2_test = train_test_split(dt, H0, test_size=0.001, random_state=11)
+    x1_train, x1_test, x2_train, x2_test = train_test_split(dt, H0, test_size=0.02, random_state=11)
 
     # Test set in torch format
     x1_test, x2_test, y_test = make_sets(x1_test, x2_test, save=True, file_name=os.path.join(path_in, "test_set.hdf5"))
@@ -229,7 +250,6 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
     train_set, valid_set, test_set = split_data(file, path_in)
     x1_train, x2_train, y_train = train_set
     x1_val, x2_val, y_val = valid_set
-    x1_test, x2_test, y_test = test_set
 
     dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train, y_train)
     dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val, y_val)
@@ -288,9 +308,10 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
 
             # loop on batches
             for x1, x2, y in dataloader:
+                x1 = gaussian_noise(x1)
                 x1 = x1.to(device, non_blocking=True).float()
                 x2 = x2.to(device, non_blocking=True).float()
-                y = y.to(device, non_blocking=True).float()
+                y = y.to(device, non_blocking=True).long()
 
                 # training phase
                 if phase == 'train':
@@ -298,13 +319,13 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                     for param in model.parameters():
                         param.grad = None
 
-                    if anomaly_detection == True:
+                    if anomaly_detection:
                         with autograd.detect_anomaly():
                             y_hat = model(x1, x2)
-                            loss = loss_fn(y_hat, y.long())
+                            loss = loss_fn(y_hat, y)
                     else:
                         y_hat = model(x1, x2)
-                        loss = loss_fn(y_hat, y.long())
+                        loss = loss_fn(y_hat, y)
 
                     # Backward Pass
                     loss.backward()
@@ -318,12 +339,12 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                 else:
                     with torch.no_grad():
                         y_hat = model(x1, x2)
-                        loss = loss_fn(y_hat, y.long())
+                        loss = loss_fn(y_hat, y)
 
                 # accuracy evaluation
                 acc = acc_fn(y_hat, y)
 
-                # update cummulative values
+                # update cumulative values
                 running_acc += acc * dataloader.batch_size
                 running_loss += loss * dataloader.batch_size
 
@@ -441,6 +462,10 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     H0 = np.delete(H0, idx_out, axis=0)
     time_delays = np.delete(time_delays, idx_out, axis=0)
 
+    sigma = .15
+    x = gaussian_noise(time_delays, sigma=sigma)
+    analytic = multi_gaussian(x[:, None, :], time_delays[None, :, :], sigma=sigma, axis=-1)
+
     gb_prior = torch.linspace(65, 75, npts)
     gb_prior = gb_prior.reshape(npts, 1)
 
@@ -448,23 +473,22 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            dt = np.tile(time_delays[it], (npts, 1))
+            dt = np.tile(x[it], (npts, 1))
             dt = torch.from_numpy(dt)
+
             gb_ratios = r_estimator(model, dt, gb_prior)
 
             true = float(H0[it])
-
-            lc_prior = torch.linspace(true-.5, true+.5, npts)
+            lc_prior = torch.linspace(true-1., true+1., npts)
             lc_prior = lc_prior.reshape(npts, 1)
-            dt = np.tile(time_delays[it], (npts, 1))
-            dt = torch.from_numpy(dt)
             lc_ratios = r_estimator(model, dt, lc_prior)
 
             pred = float(lc_prior[np.argmax(lc_ratios)])
 
-            axes[i, j].plot(gb_prior, gb_ratios, 'b')
-            axes[i, j].plot(lc_prior, lc_ratios, 'b', label='{:.2f}'.format(pred))
-            axes[i, j].vlines(true, np.min(gb_ratios), np.max(lc_ratios), colors='r', label='{:.2f}'.format(true))
+            axes[i, j].plot(analytic[it][np.argsort(H0)], H0[np.argsort(H0)], '--g', label="Analytic")
+            axes[i, j].plot(gb_prior, gb_ratios, '-b')
+            axes[i, j].plot(lc_prior, lc_ratios, '-b', label='{:.2f}'.format(pred))
+            axes[i, j].vlines(true, np.min(gb_ratios), np.max(lc_ratios), colors='r', linestyles='dotted', label='{:.2f}'.format(true))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
             axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
 

@@ -463,8 +463,8 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     time_delays = np.delete(time_delays, idx_out, axis=0)
 
     sigma = .15
-    x = gaussian_noise(time_delays, sigma=sigma)
-    analytic = multi_gaussian(x[:, None, :], time_delays[None, :, :], sigma=sigma, axis=-1)
+    x = gaussian_noise(torch.from_numpy(time_delays), sigma=sigma)
+    analytic = multi_gaussian(x[:, None, :].numpy(), time_delays[None, :, :], sigma=sigma, axis=-1)
 
     gb_prior = torch.linspace(65, 75, npts)
     gb_prior = gb_prior.reshape(npts, 1)

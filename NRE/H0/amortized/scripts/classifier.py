@@ -72,7 +72,7 @@ class DeepSets(nn.Module):
         quads = torch.mean(quads, dim=1)
 
         # Doubles and quads recombination
-        x = torch.zeros((x1.size(0), self.nfeat), device=device, dtype=float)
+        x = torch.zeros((x1.size(0), self.nfeat), device=device, dtype=doubles.dtype)
         x[ind2] = doubles
         x[ind4] = quads
 

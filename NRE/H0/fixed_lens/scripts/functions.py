@@ -485,7 +485,9 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
 
             pred = float(lc_prior[np.argmax(lc_ratios)])
 
-            axes[i, j].plot(analytic[it][np.argsort(H0)], H0[np.argsort(H0)], '--g', label="Analytic")
+            analy_ = analytic[it].flatten()
+            H0_ = H0.flatten()
+            axes[i, j].plot(H0_[np.argsort(H0_)], analy_[np.argsort(H0_)], '--g', label="Analytic")
             axes[i, j].plot(gb_prior, gb_ratios, '-b')
             axes[i, j].plot(lc_prior, lc_ratios, '-b', label='{:.2f}'.format(pred))
             axes[i, j].vlines(true, np.min(gb_ratios), np.max(lc_ratios), colors='r', linestyles='dotted', label='{:.2f}'.format(true))

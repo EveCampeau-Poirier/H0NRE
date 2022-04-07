@@ -451,6 +451,8 @@ def plot_results(file, path_out):
 def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     model = torch.load(file_model)
 
+    nexamp = int(nrow*ncol)
+
     test_set = h5py.File(file_test, 'r')
     time_delays = test_set["time_delays"][:]
     H0 = test_set["Hubble_cst"][:]
@@ -461,6 +463,24 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
     time_delays = np.delete(time_delays, idx_out, axis=0)
+
+    if os.path.isfile(path_out + "/posteriors.hdf5"):
+        os.remove(path_out + "/posteriors.hdf5")
+    post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
+
+    NRE_lc = post_file.create_group("NRE_local")
+    H0_lc = NRE_lc.create_dataset("H0", (nexamp, npts), dtype='f')
+    post_lc = NRE_lc.create_dataset("posterior", (nexamp, npts), dtype='f')
+
+    NRE_gb = post_file.create_group("NRE_global")
+    H0_gb = NRE_gb.create_dataset("H0", (nexamp, npts), dtype='f')
+    post_gb = NRE_gb.create_dataset("posterior", (nexamp, npts), dtype='f')
+
+    anltc = post_file.create_group("analytic")
+    H0_anl = anltc.create_dataset("H0", (nexamp, H0.shape[0]), dtype='f')
+    post_anl = anltc.create_dataset("posterior", (nexamp, H0.shape[0]), dtype='f')
+
+    truth_set = post_file.create_dataset("truth", (nexamp,), dtype='f')
 
     sigma = .15
     x = gaussian_noise(torch.from_numpy(time_delays), sigma=sigma)
@@ -499,7 +519,16 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
             if j == 0:
                 axes[i, j].set_ylabel("Likelihood ratio")
 
+            H0_lc[it, :] = lc_prior.flatten()
+            post_lc[it, :] = lc_ratios.flatten()
+            H0_gb[it, :] = gb_prior.flatten()
+            post_gb[it, :] = gb_ratios.flatten()
+            H0_anl[it, :] = H0_[np.argsort(H0_)]
+            post_anl[it, :] = analy_[np.argsort(H0_)]
+            truth_set[it] = true
+
             it += 1
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
     plt.savefig(path_out + '/posteriors.png', bbox_inches='tight')
+    post_file.close()

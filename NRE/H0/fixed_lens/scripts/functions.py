@@ -448,87 +448,139 @@ def plot_results(file, path_out):
     plt.savefig(path_out + '/valid_lr.png', bbox_inches='tight')
 
 
-def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
+def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000, sigma=.15):
+
     model = torch.load(file_model)
+    nplot = int(nrow * ncol)
 
-    nexamp = int(nrow*ncol)
-
+    # import data (ok)
     test_set = h5py.File(file_test, 'r')
     time_delays = test_set["time_delays"][:]
     H0 = test_set["Hubble_cst"][:]
     test_set.close()
 
+    # remove out of bounds data (ok)
     idx_up = np.where(H0 >= 75)[0]
     idx_down = np.where(H0 <= 65)[0]
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
     time_delays = np.delete(time_delays, idx_out, axis=0)
+    nsamp = time_delays.shape[0]
 
+    # file to save (ok)
     if os.path.isfile(path_out + "/posteriors.hdf5"):
         os.remove(path_out + "/posteriors.hdf5")
     post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
 
     NRE_lc = post_file.create_group("NRE_local")
-    H0_lc = NRE_lc.create_dataset("H0", (nexamp, npts), dtype='f')
-    post_lc = NRE_lc.create_dataset("posterior", (nexamp, npts), dtype='f')
+    H0_lc = NRE_lc.create_dataset("H0", (nplot, npts), dtype='f')
+    post_lc = NRE_lc.create_dataset("posterior", (nplot, npts), dtype='f')
 
     NRE_gb = post_file.create_group("NRE_global")
-    H0_gb = NRE_gb.create_dataset("H0", (nexamp, npts), dtype='f')
-    post_gb = NRE_gb.create_dataset("posterior", (nexamp, npts), dtype='f')
+    H0_gb = NRE_gb.create_dataset("H0", (nplot, npts), dtype='f')
+    post_gb = NRE_gb.create_dataset("posterior", (nplot, npts), dtype='f')
 
     anltc = post_file.create_group("analytic")
-    H0_anl = anltc.create_dataset("H0", (nexamp, H0.shape[0]), dtype='f')
-    post_anl = anltc.create_dataset("posterior", (nexamp, H0.shape[0]), dtype='f')
+    H0_anl = anltc.create_dataset("H0", (nplot, nsamp), dtype='f')
+    post_anl = anltc.create_dataset("posterior", (nplot, nsamp), dtype='f')
 
-    truth_set = post_file.create_dataset("truth", (nexamp,), dtype='f')
+    truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
 
-    sigma = .15
+    # observations
     x = gaussian_noise(torch.from_numpy(time_delays), sigma=sigma)
-    analytic = multi_gaussian(x[:, None, :].numpy(), time_delays[None, :, :], sigma=sigma, axis=-1)
+    dt = torch.repeat_interleave(x, npts, dim=0)
 
+    # analytical posterior
+    analytic = multi_gaussian(x[:, None, :].numpy(), time_delays[None, :, :], sigma=sigma, axis=-1)
+    H0_ = H0.flatten()
+    analy_ = analytic[:, np.argsort(H0_)]
+    H0_ = H0_[np.argsort(H0_)]
+    norm_ana = np.trapz(analy_, H0_, axis=1)
+    analy_ /= norm_ana[:, None]
+
+    # Global NRE posterior
     gb_prior = torch.linspace(65, 75, npts)
     gb_prior = gb_prior.reshape(npts, 1)
+    gb_pr_tile = torch.tile(gb_prior, (nsamp, 1))
+
+    gb_ratios = r_estimator(model, dt, gb_pr_tile)
+    gb_ratios = gb_ratios.reshape(nsamp, npts)
+    norm_gb = np.trapz(gb_ratios, gb_pr_tile.reshape(nsamp, npts), axis=1)
+    gb_ratios /= norm_gb[:, None]
+
+    # local NRE posterior
+    lc_prior = torch.zeros((nsamp, npts))
+    true = np.zeros((nsamp,))
+    for i in range(nsamp):
+        true[i] = float(H0[i])
+        lc_prior[i] = torch.linspace(true[i] - 1., true[i] + 1., npts)
+    lc_ratios = r_estimator(model, dt, lc_prior.reshape(npts * nsamp, 1))
+
+    # predictions
+    arg_pred = np.argmax(lc_ratios.reshape(nsamp, npts), axis=1)
+    samp_idx = np.arange(0, nsamp)
+    pred = lc_prior[samp_idx, arg_pred]
+
+    # integration from pred to true
+    start = np.minimum(true, pred)
+    end = np.maximum(true, pred)
+    interval = np.zeros((nsamp,))
+    for i in range(nsamp):
+        idx_up = np.where(gb_prior.flatten() > end[i])[0]
+        idx_down = np.where(gb_prior.flatten() < start[i])[0]
+        idx_out = np.concatenate((idx_up, idx_down))
+        interval_x = np.delete(gb_prior.flatten(), idx_out)
+        interval_y = np.delete(gb_ratios[i], idx_out)
+        interval[i] = np.trapz(interval_y, interval_x)
 
     it = 0
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            dt = np.tile(x[it], (npts, 1))
-            dt = torch.from_numpy(dt)
-
-            gb_ratios = r_estimator(model, dt, gb_prior)
-
-            true = float(H0[it])
-            lc_prior = torch.linspace(true-1., true+1., npts)
-            lc_prior = lc_prior.reshape(npts, 1)
-            lc_ratios = r_estimator(model, dt, lc_prior)
-
-            pred = float(lc_prior[np.argmax(lc_ratios)])
-
-            analy_ = analytic[it].flatten()
-            H0_ = H0.flatten()
-            axes[i, j].plot(H0_[np.argsort(H0_)], analy_[np.argsort(H0_)], '--g', label="Analytic")
-            axes[i, j].plot(gb_prior, gb_ratios, '-b')
-            axes[i, j].plot(lc_prior, lc_ratios, '-b', label='{:.2f}'.format(pred))
-            axes[i, j].vlines(true, np.min(gb_ratios), np.max(lc_ratios), colors='r', linestyles='dotted', label='{:.2f}'.format(true))
+            axes[i, j].plot(H0_, analy_[it], '--g', label="Analytic")
+            axes[i, j].plot(gb_prior, gb_ratios[it], '-b', label='{:.2f}'.format(pred[it]))
+            min_post = np.minimum(np.min(gb_ratios[it]), np.min(analy_[it]))
+            max_post = np.maximum(np.max(gb_ratios[it]), np.max(analy_[it]))
+            axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
+                              label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
+            # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
 
             if i == int(nrow - 1):
                 axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
             if j == 0:
                 axes[i, j].set_ylabel("Likelihood ratio")
 
-            H0_lc[it, :] = lc_prior.flatten()
-            post_lc[it, :] = lc_ratios.flatten()
-            H0_gb[it, :] = gb_prior.flatten()
-            post_gb[it, :] = gb_ratios.flatten()
-            H0_anl[it, :] = H0_[np.argsort(H0_)]
-            post_anl[it, :] = analy_[np.argsort(H0_)]
-            truth_set[it] = true
-
             it += 1
+
+    # saving
+    H0_lc[:, :] = lc_prior[:nplot]
+    post_lc[:, :] = lc_ratios.reshape(nsamp, npts)[:nplot]
+    H0_gb[:, :] = gb_prior[:nplot]
+    post_gb[:, :] = gb_ratios[:nplot]
+    H0_anl[:, :] = np.tile(H0_, (nplot, 1))
+    post_anl[:, :] = analy_[:nplot]
+    truth_set[:] = true[:nplot]
+
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
     plt.savefig(path_out + '/posteriors.png', bbox_inches='tight')
     post_file.close()
+
+    # Coverage diagnostic
+    bins = np.linspace(0., 1., 100)
+    counts = np.zeros((100,))
+    for i in range(len(bins)):
+        counts[i] = np.sum(np.where(2 * interval <= bins[i], 1, 0))
+    counts /= time_delays.shape[0]
+
+    plt.figure()
+    plt.plot(bins, bins, '--k')
+    plt.plot(bins, counts, '-g')
+    plt.xlabel("Probability interval")
+    plt.ylabel("Fraction of truths inside")
+    plt.text(0., .9, "Underconfident")
+    plt.text(.65, .05, "Overconfident")
+    plt.rcParams['axes.facecolor'] = 'white'
+    plt.rcParams['savefig.facecolor'] = 'white'
+    plt.savefig(path_out + '/coverage.png', bbox_inches='tight', dpi=300)

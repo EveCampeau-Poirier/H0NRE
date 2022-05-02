@@ -712,7 +712,7 @@ class training_set(object):
             # Source-lens angular diameter (Mpc)
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd, zs)
             # Velocity dispersion (Mpc/day)
-            vdisp = (np.random.uniform(150., 300.) * u.km / u.s).to('Mpc/d') # 150,300 ou fixe 300
+            vdisp = (np.random.uniform(225., 275.) * u.km / u.s).to('Mpc/d') # 150,300 ou fixe 300
             # Einstein radius (arcsec)
             theta_E = 4 * np.pi * (vdisp / c) ** 2 * Dds / Ds * 180 * 3600 / np.pi
             if theta_E < .5 or theta_E > 2.:  # .4 or 2.5
@@ -721,19 +721,19 @@ class training_set(object):
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = np.random.uniform(-.3,.3)  # -.05
+            x0_lens = -.05  # np.random.uniform(-.3,.3)
             # Lens y coordinate (arcsec)
-            y0_lens = np.random.uniform(-.3,.3)  # .02
+            y0_lens = .02  # np.random.uniform(-.3,.3)
             # Lens ellipticity
-            ellip = np.random.uniform(.3,.95)  # .7
+            ellip = np.random.uniform(.5,.9)  # .3,.95
             # Lens inclination (rad)
-            phi = np.random.uniform(-np.pi/2,np.pi/2)  # np.pi / 3
+            phi = np.pi / 3  # np.random.uniform(-np.pi/2,np.pi/2)
 
             ### External shear
             # External shear amplitude
-            gamma_ext = np.random.uniform(0.,.05)  # .03
+            gamma_ext = .03  # np.random.uniform(0.,.05)
             # External shear angle (rad)
-            phi_ext = np.random.uniform(-np.pi/2,np.pi/2)  # np.pi / 4
+            phi_ext = np.pi / 4  # np.random.uniform(-np.pi/2,np.pi/2)
 
             ### Gaussian host galaxy
             # Host galaxy magnitude (AB system)

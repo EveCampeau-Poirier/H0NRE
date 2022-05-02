@@ -3,43 +3,43 @@ import torch.nn as nn
 
 
 class DeepSets(nn.Module):
-    def __init__(self, nfeat=32, p_drop=0):
+    def __init__(self, nfeat=32, nheads=128, p_drop=0):
         super(DeepSets, self).__init__()
 
         self.nfeat = nfeat
 
         self.encoder = nn.Sequential(
-            nn.Linear(2, 64),
+            nn.Linear(2, nheads),
             nn.ReLU(),
-            nn.Linear(64, 128),
+            nn.Linear(nheads, nheads),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(nheads, nheads),
             nn.ReLU(),
-            nn.Linear(64, nfeat)
+            nn.Linear(nheads, nfeat)
         )
 
         self.latent = nn.Sequential(
-            nn.Linear(1, 64),
+            nn.Linear(1, nheads),
             nn.ReLU(),
-            nn.Linear(64, 128),
+            nn.Linear(nheads, nheads),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(nheads, nheads),
             nn.ReLU(),
-            nn.Linear(64, 1)
+            nn.Linear(nheads, 1)
         )
 
         self.decoder = nn.Sequential(
-            nn.Linear(nfeat + 1, 64),
+            nn.Linear(nfeat + 1, 2*nheads),
             nn.ReLU(),
-            nn.Linear(64, 128),
+            nn.Linear(2*nheads, 2*nheads),
             nn.ReLU(),
-            nn.Linear(128, 256),
+            nn.Linear(2*nheads, 2*nheads),
             nn.ReLU(),
-            nn.Linear(256, 128),
+            nn.Linear(2*nheads, 2*nheads),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(2*nheads, 2*nheads),
             nn.ReLU(),
-            nn.Linear(64, 2)
+            nn.Linear(2*nheads, 2)
         )
 
     def forward(self, x1, x2):

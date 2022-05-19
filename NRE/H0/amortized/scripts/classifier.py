@@ -3,43 +3,43 @@ import torch.nn as nn
 
 
 class DeepSets(nn.Module):
-    def __init__(self, nfeat=32, p_drop=0):
+    def __init__(self, nfeat=32, nhead=128):
         super(DeepSets, self).__init__()
 
         self.nfeat = nfeat
 
         self.encoder = nn.Sequential(
-            nn.Linear(2, 64),
+            nn.Linear(2, nhead),
             nn.ReLU(),
-            nn.Linear(64, 128),
+            nn.Linear(nhead, nhead),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(nhead, nhead),
             nn.ReLU(),
-            nn.Linear(64, nfeat)
+            nn.Linear(nhead, nfeat)
         )
 
         self.latent = nn.Sequential(
-            nn.Linear(1, 64),
+            nn.Linear(1, nhead),
             nn.ReLU(),
-            nn.Linear(64, 128),
+            nn.Linear(nhead, nhead),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(nhead, nhead),
             nn.ReLU(),
-            nn.Linear(64, 1)
+            nn.Linear(nhead, 1)
         )
 
         self.decoder = nn.Sequential(
-            nn.Linear(nfeat + 1, 64),
+            nn.Linear(nfeat + 1, 2*nhead),
             nn.ReLU(),
-            nn.Linear(64, 128),
+            nn.Linear(2*nhead, 2*nhead),
             nn.ReLU(),
-            nn.Linear(128, 256),
+            nn.Linear(2*nhead, 2*nhead),
             nn.ReLU(),
-            nn.Linear(256, 128),
+            nn.Linear(2*nhead, 2*nhead),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(2*nhead, 2*nhead),
             nn.ReLU(),
-            nn.Linear(64, 2)
+            nn.Linear(2*nhead, 2)
         )
 
     def forward(self, x1, x2):
@@ -83,71 +83,6 @@ class DeepSets(nn.Module):
         x = torch.cat((x, x2), dim=1)
 
         # Decoding
-        x = self.decoder(x)
-
-        return x
-
-
-class DeepSets1(nn.Module):
-    def __init__(self, nfeat=16, p_drop=0):
-        super(DeepSets1, self).__init__()
-
-        self.nfeat = nfeat
-
-        self.encoder = nn.Sequential(
-            nn.Linear(1, 64),
-            nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, nfeat)
-        )
-        
-        self.latent = nn.Sequential(
-            nn.Linear(1, 64),
-            nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
-        )
-
-        self.decoder = nn.Sequential(
-            nn.Linear(nfeat+1, 64),
-            nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 2)
-        )
-
-    def forward(self, x1, x2):
-
-        # Shuffle time delays
-        indices = torch.argsort(torch.rand(*x1.shape), dim=-1)
-        x1 = x1[torch.arange(x1.shape[0]).unsqueeze(-1), indices]
-
-        # Encoder
-        batch_size = x1.size(0)
-        x1 = x1.reshape(batch_size * x1.size(1), 1)
-        x1 = self.encoder(x1)
-
-        # Pooling
-        x1 = x1.view(batch_size, -1, self.nfeat)
-        x1 = torch.mean(x1, dim=1)
-        
-        # Conditionning on latent variable
-        x2 = self.latent(x2)
-        
-        # Decoder
-        x = torch.cat((x1, x2), dim=1)
         x = self.decoder(x)
 
         return x

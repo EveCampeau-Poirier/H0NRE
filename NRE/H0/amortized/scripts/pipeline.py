@@ -712,7 +712,7 @@ class training_set(object):
             # Source-lens angular diameter (Mpc)
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd, zs)
             # Velocity dispersion (Mpc/day)
-            vdisp = (np.random.uniform(225., 275.) * u.km / u.s).to('Mpc/d') # 150,300 ou fixe 300
+            vdisp = (np.random.uniform(200., 300.) * u.km / u.s).to('Mpc/d') # 150,300 ou fixe 300
             # Einstein radius (arcsec)
             theta_E = 4 * np.pi * (vdisp / c) ** 2 * Dds / Ds * 180 * 3600 / np.pi
             if theta_E < .5 or theta_E > 2.:  # .4 or 2.5
@@ -721,13 +721,13 @@ class training_set(object):
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = -.05  # np.random.uniform(-.3,.3)
+            x0_lens = np.random.uniform(-.3,.3) #-.05  #
             # Lens y coordinate (arcsec)
-            y0_lens = .02  # np.random.uniform(-.3,.3)
+            y0_lens = np.random.uniform(-.3,.3)#.02  #
             # Lens ellipticity
-            ellip = np.random.uniform(.5,.9)  # .3,.95
+            ellip = np.random.uniform(.3,.95)  # .3,.95
             # Lens inclination (rad)
-            phi = np.pi / 3  # np.random.uniform(-np.pi/2,np.pi/2)
+            phi = np.random.uniform(-np.pi/2,np.pi/2)#np.pi / 3  #
 
             ### External shear
             # External shear amplitude
@@ -843,10 +843,11 @@ class training_set(object):
                 set_dt[it, :] = time_delays
                 if len(fermat_pot) == 2:
                     pad = -np.ones((2))
-                    fermat_pot = np.concatenate((fermat_pot, pad), axis=None)
+                    fermat_pot = np.concatenate((fermat_pot - np.min(fermat_pot), pad), axis=None)
                     xim = np.concatenate((xim, pad), axis=None)
                     yim = np.concatenate((yim, pad), axis=None)
-                set_pot[it, :] = fermat_pot
+                    set_pot[it, :] = fermat_pot
+                else : set_pot[it, :] = fermat_pot - np.min(fermat_pot)
                 set_pos[it, :] = np.array([xim, yim])
                 set_H0[it, :] = np.array([H0])
 

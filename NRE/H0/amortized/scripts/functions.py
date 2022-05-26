@@ -48,6 +48,25 @@ def noise(x, expo_time=1000, sig_bg=.001):
     
     return noisy_im
 
+def gaussian_noise(x, sigma=.15):
+    """
+    Adds noise to time delays
+    Inputs
+        x : (tensor)[batch_size x 4] images
+        sigma : (float) noise standard deviation
+    Outputs
+        noisy_data : (tensor)[batch_size x 4] noisy time delays
+    """
+    noise = sigma * torch.randn(x.size())
+    noisy_data = x + noise
+
+    return noisy_data
+
+def multi_gaussian(x, mu, sigma=.15, axis=(1,2)):
+    """Must work with doubles and quads"""
+    size = np.prod(x.shape[1:])
+    lkh = np.exp(-np.sum((x - mu) ** 2, axis=axis) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size/2)
+    return lkh
 
 def r_estimator(model, x1, x2):
     """
@@ -179,10 +198,10 @@ def split_data(file, path_in):
     # close files
     dataset.close()
 
-    images = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     
     # Splitting training and test sets
-    x1_train, x1_test, x2_train, x2_test = train_test_split(images, H0, test_size=0.20, random_state=11)
+    x1_train, x1_test, x2_train, x2_test = train_test_split(samples, H0, test_size=0.20, random_state=11)
 
     # Test set in torch format
     x1_test, x2_test, y_test = make_sets(x1_test, x2_test, save=True, file_name=os.path.join(path_in, "test_set.hdf5"))
@@ -435,49 +454,141 @@ def plot_results(file, path_out):
     plt.savefig(path_out+'/valid_lr.png', bbox_inches='tight')
 
     
-def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
-    
+def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000, sigma=.15):
+
     model = torch.load(file_model)
-    
+    nplot = int(nrow * ncol)
+
+    # import data (ok)
     test_set = h5py.File(file_test, 'r')
-    time_delays = test_set["time_delays"][:]
-    fermat_pot = test_set["Fermat_potential"][:]
+    dt = test_set["time_delays"][:]
+    pot = test_set["Fermat_potential"][:]
+    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     H0 = test_set["Hubble_cst"][:]
     test_set.close()
 
-    images = np.concatenate((time_delays[:, :, None], fermat_pot[:, :, None]), axis=2)
-
+    # remove out of bounds data
     idx_up = np.where(H0 >= 75)[0]
     idx_down = np.where(H0 <= 65)[0]
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
-    images = np.delete(images, idx_out, axis=0)
-    
-    prior = torch.linspace(65, 75, npts)
-    prior = prior.reshape(npts, 1)
-    
+    samples = np.delete(samples, idx_out, axis=0)
+    nsamp = samples.shape[0]
+
+    # file to save (ok)
+    if os.path.isfile(path_out + "/posteriors.hdf5"):
+        os.remove(path_out + "/posteriors.hdf5")
+    post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
+
+    NRE_lc = post_file.create_group("NRE_local")
+    H0_lc = NRE_lc.create_dataset("H0", (nplot, npts), dtype='f')
+    post_lc = NRE_lc.create_dataset("posterior", (nplot, npts), dtype='f')
+
+    NRE_gb = post_file.create_group("NRE_global")
+    H0_gb = NRE_gb.create_dataset("H0", (nplot, npts), dtype='f')
+    post_gb = NRE_gb.create_dataset("posterior", (nplot, npts), dtype='f')
+
+    anltc = post_file.create_group("analytic")
+    H0_anl = anltc.create_dataset("H0", (nplot, nsamp), dtype='f')
+    post_anl = anltc.create_dataset("posterior", (nplot, nsamp), dtype='f')
+
+    truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
+
+    # observations
+    x = gaussian_noise(torch.from_numpy(samples), sigma=sigma)
+    data = torch.repeat_interleave(x, npts, dim=0)
+
+    # analytical posterior
+    analytic = multi_gaussian(x[:, None, :].numpy(), samples[None, :, :], sigma=sigma, axis=-1)
+    H0_ = H0.flatten()
+    analy_ = analytic[:, np.argsort(H0_)]
+    H0_ = H0_[np.argsort(H0_)]
+    norm_ana = np.trapz(analy_, H0_, axis=1)
+    analy_ /= norm_ana[:, None]
+
+    # Global NRE posterior
+    gb_prior = torch.linspace(65, 75, npts)
+    gb_prior = gb_prior.reshape(npts, 1)
+    gb_pr_tile = torch.tile(gb_prior, (nsamp, 1))
+
+    gb_ratios = r_estimator(model, data, gb_pr_tile)
+    gb_ratios = gb_ratios.reshape(nsamp, npts)
+    norm_gb = np.trapz(gb_ratios, gb_pr_tile.reshape(nsamp, npts), axis=1)
+    gb_ratios /= norm_gb[:, None]
+
+    # local NRE posterior
+    lc_prior = torch.zeros((nsamp, npts))
+    true = np.zeros((nsamp,))
+    for i in range(nsamp):
+        true[i] = float(H0[i])
+        lc_prior[i] = torch.linspace(true[i] - 1., true[i] + 1., npts)
+    lc_ratios = r_estimator(model, data, lc_prior.reshape(npts * nsamp, 1))
+
+    # predictions
+    arg_pred = np.argmax(lc_ratios.reshape(nsamp, npts), axis=1)
+    samp_idx = np.arange(0, nsamp)
+    pred = lc_prior[samp_idx, arg_pred]
+
+    # integration from pred to true
+    start = np.minimum(true, pred)
+    end = np.maximum(true, pred)
+    interval = np.zeros((nsamp,))
+    for i in range(nsamp):
+        idx_up = np.where(gb_prior.flatten() > end[i])[0]
+        idx_down = np.where(gb_prior.flatten() < start[i])[0]
+        idx_out = np.concatenate((idx_up, idx_down))
+        interval_x = np.delete(gb_prior.flatten(), idx_out)
+        interval_y = np.delete(gb_ratios[i], idx_out)
+        interval[i] = np.trapz(interval_y, interval_x)
+
     it = 0
-    fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3*ncol, 3*nrow))
+    fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            im = np.tile(images[it], (npts, 1, 1))
-            im = torch.from_numpy(im)
-            ratios = r_estimator(model, im, prior)
-            
-            true = float(H0[it])
-            pred = float(prior[np.argmax(ratios)])
-            
-            axes[i, j].plot(prior, ratios, 'b', label='{:.2f}'.format(pred))
-            axes[i, j].vlines(true, np.min(ratios), np.max(ratios), colors='r', label='{:.2f}'.format(true))
+            axes[i, j].plot(H0_, analy_[it], '--g', label="Analytic")
+            axes[i, j].plot(gb_prior, gb_ratios[it], '-b', label='{:.2f}'.format(pred[it]))
+            min_post = np.minimum(np.min(gb_ratios[it]), np.min(analy_[it]))
+            max_post = np.maximum(np.max(gb_ratios[it]), np.max(analy_[it]))
+            axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
+                              label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
-            
-            if i == int(nrow-1):
+            # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
+
+            if i == int(nrow - 1):
                 axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
             if j == 0:
                 axes[i, j].set_ylabel("Likelihood ratio")
-            
+
             it += 1
+
+    # saving
+    H0_lc[:, :] = lc_prior[:nplot]
+    post_lc[:, :] = lc_ratios.reshape(nsamp, npts)[:nplot]
+    H0_gb[:, :] = gb_prior[:nplot]
+    post_gb[:, :] = gb_ratios[:nplot]
+    H0_anl[:, :] = np.tile(H0_, (nplot, 1))
+    post_anl[:, :] = analy_[:nplot]
+    truth_set[:] = true[:nplot]
+
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
-    plt.savefig(path_out+'/posteriors.png', bbox_inches='tight')
+    plt.savefig(path_out + '/posteriors.png', bbox_inches='tight')
+    post_file.close()
+
+    # Coverage diagnostic
+    bins = np.linspace(0., 1., 100)
+    counts = np.zeros((100,))
+    for i in range(len(bins)):
+        counts[i] = np.sum(np.where(2 * interval <= bins[i], 1, 0))
+    counts /= nsamp
+
+    plt.figure()
+    plt.plot(bins, bins, '--k')
+    plt.plot(bins, counts, '-g')
+    plt.xlabel("Probability interval")
+    plt.ylabel("Fraction of truths inside")
+    plt.text(0., .9, "Underconfident")
+    plt.text(.65, .05, "Overconfident")
+    plt.rcParams['axes.facecolor'] = 'white'
+    plt.rcParams['savefig.facecolor'] = 'white'
+    plt.savefig(path_out + '/coverage.png', bbox_inches='tight', dpi=300)

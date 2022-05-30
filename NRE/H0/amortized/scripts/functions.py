@@ -48,17 +48,23 @@ def noise(x, expo_time=1000, sig_bg=.001):
     
     return noisy_im
 
-def gaussian_noise(x, sigma=.15):
+def gaussian_noise(x, sig_dt=.3, sig_pot = .004):
     """
     Adds noise to time delays
     Inputs
-        x : (tensor)[batch_size x 4] images
-        sigma : (float) noise standard deviation
+        x : (tensor)[batch_size x 4 x 2] Time delays and Fermat potentials
+        sig_dt : (float) noise standard deviation on time delays
+        sig_pot : (float) noise standard deviation on Fermat potentials
     Outputs
-        noisy_data : (tensor)[batch_size x 4] noisy time delays
+        noisy_data : (tensor)[batch_size x 4 x 2] noisy data
     """
-    noise = sigma * torch.randn(x.size())
-    noisy_data = x + noise
+    idx = np.where(x == -1)
+    noise_dt = sig_dt * torch.randn((x.size(0), x.size(1) - 1))
+    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1) - 1))
+    noisy_data = torch.zeros(x.size())
+    noisy_data[:, 1:, 0] = x[:, 1:, 0] + noise_dt
+    noisy_data[:, 1:, 1] = x[:, 1:, 1] + noise_pot
+    noisy_data[idx] = -1
 
     return noisy_data
 

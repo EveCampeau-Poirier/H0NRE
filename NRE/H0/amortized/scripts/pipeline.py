@@ -140,7 +140,7 @@ class training_set(object):
                        fontsize=10, labelpad=15)
         plt.clim(np.min(np.log10(kappa_map)), np.max(np.log10(kappa_map)))
 
-        if test == True:
+        if test:
             self.plot_cuts_and_caustics(param)
 
     # ---------------------------- Analytical alphas -----------------------------
@@ -603,7 +603,7 @@ class training_set(object):
         time_delays = (1 + zd) * Dd * Ds / Dds / c.value * (fermat_pot - np.min(fermat_pot))
         time_delays *= (2 * np.pi / 360 / 3600) ** 2 # Conversion to days
 
-        if len(time_delays) == 2:
+        if len(fermat_pot) == 2:
             pad = -np.ones((2))
             time_delays = np.concatenate((time_delays, pad), axis=None)
 
@@ -678,7 +678,7 @@ class training_set(object):
         """Generates training examples"""
 
         # Opening files
-        if save == True:
+        if save:
             file = h5py.File(self.path + 'dataset.hdf5', 'a')
             set_im = file.create_dataset("images", (self.nsamp, 1, self.npix, self.npix), dtype='f')
             set_param = file.create_dataset("parameters", (self.nsamp, 14), dtype='f')
@@ -721,19 +721,19 @@ class training_set(object):
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = -.05  # np.random.uniform(-.3,.3)
+            x0_lens = np.random.uniform(-.3,.3)  # -.05
             # Lens y coordinate (arcsec)
-            y0_lens = .02  # np.random.uniform(-.3,.3)
+            y0_lens = np.random.uniform(-.3,.3)  # .02
             # Lens ellipticity
-            ellip = np.random.uniform(.5, .9)  # .7
+            ellip = np.random.uniform(.3, .99)  # .7
             # Lens inclination (rad)
-            phi = np.pi / 3  # np.random.uniform(-np.pi/2,np.pi/2)
+            phi = np.random.uniform(-np.pi/2,np.pi/2)  # np.pi / 3
 
             ### External shear
             # External shear amplitude
-            gamma_ext = .03  # np.random.uniform(0.,.05)
+            gamma_ext = np.random.uniform(0.,.05)  # .03
             # External shear angle (rad)
-            phi_ext = np.pi / 4  # np.random.uniform(-np.pi/2,np.pi/2)
+            phi_ext = np.random.uniform(-np.pi/2,np.pi/2)  # np.pi / 4
 
             ### Gaussian host galaxy
             # Host galaxy magnitude (AB system)
@@ -780,7 +780,7 @@ class training_set(object):
             # time delays
             kappa_map = None
             host = self.gaussian_host(param)
-            if self.analytique == True:
+            if self.analytique:
                 alpha = self.SIE_alpha(param)
             else:
                 alpha = self.alpha_convolution(kappa_map)
@@ -802,41 +802,41 @@ class training_set(object):
                 continue
 
             # Figures
-            if fig[0] == True:
+            if fig[0]:
                 self.fig_kappa(kappa_map, param, test, )
-                if savefig[0] == True:
+                if savefig[0]:
                     plt.savefig(self.path + "kappa{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[1] == True:
+            if fig[1]:
                 self.fig_alpha(alpha, param)
-                if savefig[1] == True:
+                if savefig[1]:
                     plt.savefig(self.path + "alpha_ana{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[2] == True:
+            if fig[2]:
                 self.fig_alpha(alpha, param)
-                if savefig[2] == True:
+                if savefig[2]:
                     plt.savefig(self.path + "alpha_conv{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[3] == True:
+            if fig[3]:
                 self.fig_host(host, param)
-                if savefig[3] == True:
+                if savefig[3]:
                     plt.savefig(self.path + "host{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[4] == True:
+            if fig[4]:
                 self.fig_image(im_host, param)
-                if savefig[4] == True:
+                if savefig[4]:
                     plt.savefig(self.path + "im_host{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[5] == True:
+            if fig[5]:
                 self.fig_image(im_psf, param)
-                if savefig[5] == True:
+                if savefig[5]:
                     plt.savefig(self.path + "host_psf{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[6] == True:
+            if fig[6]:
                 self.fig_AGN(im_AGN, param)
-                if savefig[6] == True:
+                if savefig[6]:
                     plt.savefig(self.path + "im_AGN{}.png".format(it), dpi=600, bbox_inches='tight')
-            if fig[7] == True:
+            if fig[7]:
                 self.fig_total(im, param)
-                if savefig[7] == True:
+                if savefig[7]:
                     plt.savefig(self.path + "im{}.png".format(it), dpi=600, bbox_inches='tight')
 
             # Saving
-            if save == True:
+            if save:
                 set_im[it, :] = im.reshape(1, self.npix, self.npix)
                 set_param[it, :] = param
                 set_shft[it, :] = np.array([zd, zs])
@@ -847,12 +847,13 @@ class training_set(object):
                     xim = np.concatenate((xim, pad), axis=None)
                     yim = np.concatenate((yim, pad), axis=None)
                     set_pot[it, :] = fermat_pot
-                else : set_pot[it, :] = fermat_pot - np.min(fermat_pot)
+                else:
+                    set_pot[it, :] = fermat_pot - np.min(fermat_pot)
                 set_pos[it, :] = np.array([xim, yim])
                 set_H0[it, :] = np.array([H0])
 
             it += 1  # update iteration
 
         # Fermeture des fichiers
-        if save == True:
+        if save:
             file.close()

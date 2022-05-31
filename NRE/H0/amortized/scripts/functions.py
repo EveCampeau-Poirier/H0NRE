@@ -50,7 +50,7 @@ def noise(x, expo_time=1000, sig_bg=.001):
 
 def gaussian_noise(x, sig_dt=.3, sig_pot = .004):
     """
-    Adds noise to time delays
+    Adds noise to samples
     Inputs
         x : (tensor)[batch_size x 4 x 2] Time delays and Fermat potentials
         sig_dt : (float) noise standard deviation on time delays

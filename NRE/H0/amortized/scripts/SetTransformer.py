@@ -88,21 +88,18 @@ class SetTransformer(nn.Module):
     def forward(self, x1, x2):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-        # shape x1 : batch, 4, 2
-        dt = x1[:, :, 0]
-        pot = x1[:, :, 1]
         # Doubles and quads separation
-        count = torch.count_nonzero(dt + 1, dim=1)
+        count = torch.count_nonzero(x1[:, :, 0] + 1, dim=1)
         if torch.any(count == 2):
             ind2 = torch.where(count == 2)
-            doubles = torch.cat((dt[ind2][:, :2, None], pot[ind2][:, :2, None]), dim=2)
+            doubles = x1[ind2][:, :2, :]
             doubles = self.enc(doubles)
             doubles = self.pool(doubles)
             doubles = self.pool(doubles)
             x = doubles.squeeze(1)
         if torch.any(count == 4):
             ind4 = torch.where(count == 4)
-            quads = torch.cat((dt[ind4][:, :, None], pot[ind4][:, :, None]), dim=2)
+            quads = x1[ind4]
             quads = self.enc(quads)
             quads = self.pool(quads)
             x = quads.squeeze(1)

@@ -43,12 +43,13 @@ def noise(x, expo_time=1000, sig_bg=.001):
         noisy_im : (tensor)[batch_size x nchan x npix x npix] noisy image
     """
     poisson = sig_bg*torch.randn(x.size()) # poisson noise
-    bckgrd = torch.sqrt(abs(x)/expo_time)*torch.randn(x.size()) # bakcground noise
-    noisy_im = bckgrd+poisson+x
+    bckgnd = torch.sqrt(abs(x)/expo_time)*torch.randn(x.size()) # background noise
+    noisy_im = bckgnd+poisson+x
     
     return noisy_im
 
-def gaussian_noise(x, sig_dt=.3, sig_pot = .004):
+
+def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     """
     Adds noise to samples
     Inputs
@@ -58,21 +59,49 @@ def gaussian_noise(x, sig_dt=.3, sig_pot = .004):
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy data
     """
-    idx = np.where(x == -1)
-    noise_dt = sig_dt * torch.randn((x.size(0), x.size(1) - 1))
-    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1) - 1))
+    mask_zero = np.where(x[:, :, 0] == 0, 0, 1)
+    mask_pad = np.where(x[:, :, 0] == -1, 0, 1)
+    noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
+    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
     noisy_data = torch.zeros(x.size())
-    noisy_data[:, 1:, 0] = x[:, 1:, 0] + noise_dt
-    noisy_data[:, 1:, 1] = x[:, 1:, 1] + noise_pot
-    noisy_data[idx] = -1
+    noisy_data[:, :, 0] = x[:, :, 0] + noise_dt * mask_zero * mask_pad
+    noisy_data[:, :, 1] = x[:, :, 1] + noise_pot * mask_zero * mask_pad
 
     return noisy_data
 
-def multi_gaussian(x, mu, sigma=.15, axis=(1,2)):
-    """Must work with doubles and quads"""
-    size = np.prod(x.shape[1:])
-    lkh = np.exp(-np.sum((x - mu) ** 2, axis=axis) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size/2)
-    return lkh
+
+def analytical_likelihood(x, mu, sig_dt=.3, sig_pot=.003):
+    """
+    Computes the analytical likelihood
+    Inputs
+        x : (array)[test set size x 4 x 2] Noisy time delays and Fermat potentials
+        mu : (array)[test set size x 4 x 2] True time delays and Fermat potentials
+        sig_dt : (float) noise standard deviation on time delays
+        sig_pot : (float) noise standard deviation on Fermat potentials
+    Outputs
+        noisy_data : (tensor)[batch_size x 4 x 2] noisy data
+    """
+    sigma = np.array([[[sig_dt, sig_pot]]])
+    count = np.count_nonzero(x[:, :, 0] + 1, axis=1)
+
+    if np.any(count == 2):
+        ind2 = np.where(count == 2)
+        lkh_doub = np.exp(-np.sum((x[ind2][:, None] - mu[ind2][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
+                    2 * np.pi * sigma ** 2)
+        lkh_doub = np.prod(lkh_doub, axis=2)
+    else:
+        lkh_doub = np.empty(0)
+
+    if np.any(count == 4):
+        ind4 = np.where(count == 4)
+        lkh_quad = np.exp(-np.sum((x[ind4][:, None] - mu[ind4][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
+                    2 * np.pi * sigma ** 2) ** 2
+        lkh_quad = np.prod(lkh_quad, axis=2)
+    else:
+        lkh_quad = np.empty(0)
+
+    return lkh_doub, lkh_quad
+
 
 def r_estimator(model, x1, x2):
     """
@@ -460,7 +489,7 @@ def plot_results(file, path_out):
     plt.savefig(path_out+'/valid_lr.png', bbox_inches='tight')
 
     
-def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000, sigma=.15):
+def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
 
     model = torch.load(file_model)
     nplot = int(nrow * ncol)
@@ -501,11 +530,11 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000, sigma=
     truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
 
     # observations
-    x = gaussian_noise(torch.from_numpy(samples), sigma=sigma)
+    x = gaussian_noise(torch.from_numpy(samples))
     data = torch.repeat_interleave(x, npts, dim=0)
 
     # analytical posterior
-    analytic = multi_gaussian(x[:, None, :].numpy(), samples[None, :, :], sigma=sigma, axis=-1)
+    analy_doub, analy_quad = analytical_likelihood(x.numpy(), samples)
     H0_ = H0.flatten()
     analy_ = analytic[:, np.argsort(H0_)]
     H0_ = H0_[np.argsort(H0_)]

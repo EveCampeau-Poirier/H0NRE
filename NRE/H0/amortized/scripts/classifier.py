@@ -36,14 +36,12 @@ class DeepSets(nn.Module):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         # shape x1 : batch, 4, 2
-        dt = x1[:, :, 0]
-        pot = x1[:, :, 1]
         # Doubles and quads separation
-        count = torch.count_nonzero(dt + 1, dim=1)
+        count = torch.count_nonzero(x1[:, :, 0] + 1, dim=1)
         ind2 = torch.where(count == 2)
         ind4 = torch.where(count == 4)
-        doubles = torch.cat((dt[ind2][:, :2, None], pot[ind2][:, :2, None]), dim=2)
-        quads = torch.cat((dt[ind4][:, :, None], pot[ind4][:, :, None]), dim=2)
+        doubles = x1[ind2][:, :2]
+        quads = x1[ind4]
 
         # Reshape to apply the encoder
         doubles = doubles.reshape(2 * doubles.size(0), 2)

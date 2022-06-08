@@ -596,7 +596,7 @@ class training_set(object):
     def get_time_delays(self, cosmo, image_caract):
         """Time delays between AGN images"""
         # Parameters
-        zs, zd, Ds, Dd, Dds, vdisp = cosmo[:-1]
+        zs, zd, Ds, Dd, Dds, vdisp, H0 = cosmo
         xim, yim, magn, fermat_pot = image_caract
 
         # Time delays

@@ -180,37 +180,24 @@ def normalization(x, y, idx):
     return x, y
 
 
-def make_sets(x1, x2, save=False, file_name=""):
+def make_classes(x1, x2):
     """
     Creates labels, shuffles data
     Inputs 
-        x1 : (array) [nexamp x 4] Time delay tensor
+        x1 : (array) [nexamp x 4 x 2] data tensor
         x2 : (array) [nexamp x 1] H_0 tensor
     Outputs
-        x1 : (tensor) [nexamp x 4] Time delay tensor
+        x1 : (tensor) [nexamp x 4 x 2] data tensor
         x2 : (tensor) [nexamp x 1] H_0 tensor
         y : (tensor) [nexamp x 1] label tensor
     """
-    if save :
-        if os.path.isfile(file_name):
-            os.remove(file_name)
-        nsamp = x1.shape[0]
-        file = h5py.File(file_name, 'a')
-        dt_set = file.create_dataset("time_delays", (nsamp, 4), dtype='f')
-        H0_set = file.create_dataset("Hubble_cst", (nsamp, 1), dtype='f')
-        pot_set = file.create_dataset("Fermat_potential", (nsamp, 4), dtype='f')
-        dt_set[:,:] = x1[:,:,0]
-        pot_set[:,:] = x1[:,:,1]
-        H0_set[:,:] = x2
-        file.close()
-    
     nsamp = x1.shape[0]
     nclass = int(nsamp/2)
     if nsamp %2 == 0:
-        x2[nclass:] = np.random.uniform(64., 76., size=(nclass,1))
+        x2[nclass:] = np.random.uniform(64., 76., size=(nclass, 1))
         y = np.concatenate((np.ones(nclass), np.zeros(nclass)))
-    else : 
-        x2[nclass+1:] = np.random.uniform(64., 76., size=(nclass,1))
+    else:
+        x2[nclass+1:] = np.random.uniform(64., 76., size=(nclass, 1))
         y = np.concatenate((np.ones(nclass+1), np.zeros(nclass)))
                             
     shuffle = np.random.choice(nsamp, nsamp, replace=False)
@@ -223,52 +210,54 @@ def make_sets(x1, x2, save=False, file_name=""):
 
 def split_data(file, path_in):
     """
-    Reads data, preprocesses data and splits data into training, validation and test sets
+    Reads data, generates classes and splits data into training, validation and test sets
     Inputs 
         file : (str) name of the file containing data
+        path_in : (str) file's directory
     Outputs
-        All outputs are a list of the images, the time delays, the H0 and the labels tensors
-        train_set : (list) training set. Corresponds to 60% of all data.
-        valid_set : (list) validation set. Corresponds to 20% of all data.
-        test_set : (list) test set. Corresponds to 20% of all data.
+        All outputs are a list of the time delays, the Fermat potential, the H0 and the labels tensors
+        train_set : (list) training set. Corresponds to 80% of all data.
+        valid_set : (list) validation set. Corresponds to 10% of all data.
     """
+    # Reading data
     dataset = h5py.File(os.path.join(path_in, file), 'r')
-    
-    # Time delays
     dt = dataset["time_delays"][:]
-
-    # Fermat potential
     pot = dataset["Fermat_potential"][:]
-    
-    # Hubble constant
     H0 = dataset["Hubble_cst"][:]
-    
-    # close files
     dataset.close()
-
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    
-    # Splitting training and test sets
-    x1_train, x1_test, x2_train, x2_test = train_test_split(samples, H0, test_size=0.10, random_state=11)
 
-    # Test set in torch format
-    x1_test, x2_test, y_test = make_sets(x1_test, x2_test, save=True, file_name=os.path.join(path_in, "test_set.hdf5"))
-    
-    # Splitting training and validation sets
-    x1_train, x1_val, x2_train, x2_val = train_test_split(x1_train, x2_train, test_size=1/9, random_state=11)
+    # Splitting sets
+    nsamp = samples.shape[0]
+    keys = np.arange(nsamp)
+    train_keys = np.random.choice(keys, size=int(.8*nsamp), replace=False)
+    keys = np.delete(keys, train_keys, axis=0)
+    valid_keys = np.random.choice(keys, size=int(.1*nsamp), replace=False)
+    keys = np.delete(keys, valid_keys, axis=0)
 
-    # Training set in torch format
-    x1_train, x2_train, y_train = make_sets(x1_train, x2_train)
+    x1_train, x2_train = samples[train_keys], H0[train_keys]
+    x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
 
-    # Validation set in torch format
-    x1_val, x2_val, y_val = make_sets(x1_val, x2_val)
+    # Saving keys
+    if os.path.isfile(path_in+'/keys.hdf5'):
+        os.remove(path_in+'/keys.hdf5')
+    keys_file = h5py.File('keys.hdf5', 'a')
+    train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
+    valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
+    test_ids = keys_file.create_dataset("test", keys.shape, dtype='i')
+    train_ids[:] = train_keys
+    valid_ids[:] = valid_keys
+    test_ids[:] = keys
+
+    # Making labels + torch format
+    x1_train, x2_train, y_train = make_classes(x1_train, x2_train)
+    x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid)
     
     # Outputs
     train_set = [x1_train, x2_train, y_train]
-    valid_set = [x1_val, x2_val, y_val]
-    test_set = [x1_test, x2_test, y_test]
+    valid_set = [x1_valid, x2_valid, y_valid]
     
-    return train_set, valid_set, test_set
+    return train_set, valid_set
 
 
 def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=None, 
@@ -300,7 +289,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
     loss_fn = loss_fn.to(device, non_blocking=True)
     
     # Datasets
-    train_set, valid_set, test_set = split_data(file, path_in)
+    train_set, valid_set = split_data(file, path_in)
     x1_train, x2_train, y_train = train_set
     x1_val, x2_val, y_val = valid_set
     
@@ -443,6 +432,14 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
 
 # --- plots ----------------------------------------------
 def plot_results(file, path_out):
+    """
+    Plots learning curves
+    Inputs
+        file : (str) name of the logs file
+        path_out : (str) directory to save plots
+    Outputs
+        None
+    """
     
     # data extraction
     data = h5py.File(file, 'r')
@@ -503,25 +500,39 @@ def plot_results(file, path_out):
     plt.savefig(path_out+'/valid_lr.png', bbox_inches='tight')
 
     
-def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
-
+def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1000):
+    """
+    Reads data, generates classes and splits data into training, validation and test sets
+    Inputs
+        file : (str) name of the file containing data
+        path_in : (str) file's directory
+    Outputs
+        All outputs are a list of the time delays, the Fermat potential, the H0 and the labels tensors
+        train_set : (list) training set. Corresponds to 80% of all data.
+        valid_set : (list) validation set. Corresponds to 10% of all data.
+    """
     model = torch.load(file_model)
     nplot = int(nrow * ncol)
 
-    # import data (ok)
-    test_set = h5py.File(file_test, 'r')
-    dt = test_set["time_delays"][:]
-    pot = test_set["Fermat_potential"][:]
-    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    H0 = test_set["Hubble_cst"][:]
-    test_set.close()
+    # import keys
+    keys = h5py.File(file_keys, 'r')
+    test_keys = keys["test"][:]
+    keys.close()
 
+    # import data
+    dataset = h5py.File(file_data, 'r')
+    H0 = dataset["Hubble_cst"][test_keys]
     # remove out of bounds data
     idx_up = np.where(H0 >= 75)[0]
     idx_down = np.where(H0 <= 65)[0]
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
-    samples = np.delete(samples, idx_out, axis=0)
+    test_keys = np.delete(test_keys, idx_out, axis=0)
+    dt = dataset["time_delays"][test_keys]
+    pot = dataset["Fermat_potential"][test_keys]
+    redshifts = dataset["redshifts"][test_keys]
+    dataset.close()
+    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     nsamp = samples.shape[0]
 
     # observations
@@ -537,8 +548,7 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     #H0_quad, analy_quad = normalization(H0_, analy_quad, ind4)
 
     # Global NRE posterior
-    gb_prior = torch.linspace(65, 75, npts)
-    gb_prior = gb_prior.reshape(npts, 1)
+    gb_prior = torch.linspace(65, 75, npts).reshape(npts, 1)
     gb_pr_tile = torch.tile(gb_prior, (nsamp, 1))
 
     gb_ratios = r_estimator(model, data, gb_pr_tile)
@@ -551,7 +561,8 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     true = np.zeros((nsamp,))
     for i in range(nsamp):
         true[i] = float(H0[i])
-        lc_prior[i] = torch.linspace(true[i] - 1., true[i] + 1., npts)
+        max_prob = np.max(gb_ratios[i])
+        lc_prior[i] = torch.linspace(max_prob - 1., max_prob + 1., npts)
     lc_ratios = r_estimator(model, data, lc_prior.reshape(npts * nsamp, 1))
 
     # predictions

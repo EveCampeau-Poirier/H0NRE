@@ -49,58 +49,52 @@ def noise(x, expo_time=1000, sig_bg=.001):
     return noisy_im
 
 
-def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
+def gaussian_noise(x, sig_dt=.4):
     """
-    Adds noise to samples
+    Adds noise to time delays
     Inputs
         x : (tensor)[batch_size x 4 x 2] Time delays and Fermat potentials
         sig_dt : (float) noise standard deviation on time delays
-        sig_pot : (float) noise standard deviation on Fermat potentials
     Outputs
-        noisy_data : (tensor)[batch_size x 4 x 2] noisy data
+        noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
-    mask_zero = np.where(x[:, :, 0] == 0, 0, 1)
-    mask_pad = np.where(x[:, :, 0] == -1, 0, 1)
+    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)
+    mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
     noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
-    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
-    noisy_data = torch.zeros(x.size())
-    noisy_data[:, :, 0] = x[:, :, 0] + noise_dt * mask_zero * mask_pad
-    noisy_data[:, :, 1] = x[:, :, 1] + noise_pot * mask_zero * mask_pad
+    noisy_data = x.clone()
+    noisy_data[:, :, 0] += noise_dt * mask_zero * mask_pad
 
     return noisy_data
 
 
-def analytical_likelihood(x, mu, sig_dt=.3, sig_pot=.003):
+def analytical_likelihood(x, mu, sigma=.4):
     """
     Computes the analytical likelihood
     Inputs
-        x : (array)[test set size x 4 x 2] Noisy time delays and Fermat potentials
-        mu : (array)[test set size x 4 x 2] True time delays and Fermat potentials
-        sig_dt : (float) noise standard deviation on time delays
-        sig_pot : (float) noise standard deviation on Fermat potentials
+        x : (array)[test set size x 4] Noisy time delays
+        mu : (array)[test set size x 4] True time delays
+        sigma : (float) noise standard deviation on time delays
     Outputs
-        noisy_data : (tensor)[batch_size x 4 x 2] noisy data
+        lkh_doub : (tensor)[nbr of doubles x nbr of doubles] Likelihood on doubles
+        lkh_quad : (tensor)[nbr of quads x nbr of quads] Likelihood on quads
     """
-    sigma = np.array([[[sig_dt, sig_pot]]])
-    count = np.count_nonzero(x[:, :, 0] + 1, axis=1)
+    count = np.count_nonzero(x + 1, axis=1)
 
     if np.any(count == 2):
-        ind2 = np.where(count == 2)
-        lkh_doub = np.exp(-np.sum((x[ind2][:, None] - mu[ind2][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
-                    2 * np.pi * sigma ** 2)
-        lkh_doub = np.prod(lkh_doub, axis=2)
-    else:
-        lkh_doub = np.empty(0)
+        ind2 = np.where(count == 2)[0]
+        #lkh_doub = np.exp(-np.sum((x[ind2][:, None] - mu[ind2][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
+        #            2 * np.pi * sigma ** 2)
+    #else:
+    #    lkh_doub = np.empty(0)
 
     if np.any(count == 4):
-        ind4 = np.where(count == 4)
-        lkh_quad = np.exp(-np.sum((x[ind4][:, None] - mu[ind4][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
-                    2 * np.pi * sigma ** 2) ** 2
-        lkh_quad = np.prod(lkh_quad, axis=2)
-    else:
-        lkh_quad = np.empty(0)
+        ind4 = np.where(count == 4)[0]
+        #lkh_quad = np.exp(-np.sum((x[ind4][:, None] - mu[ind4][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
+        #            2 * np.pi * sigma ** 2) ** 2
+    #else:
+    #    lkh_quad = np.empty(0)
 
-    return lkh_doub, lkh_quad
+    return ind2, ind4
 
 
 def r_estimator(model, x1, x2):
@@ -165,6 +159,25 @@ def index_probe(theta, labels, probe, dependence=True):
     idx = ids[id_class]
 
     return idx
+
+
+def normalization(x, y, idx):
+    """
+        Sorts H0 values associated with doubles or quads, then normalizes the analytical posterior
+        Inputs
+            x : (tensor) H0 values
+            y : (tensor) posterior probabilities
+            idx : (float)
+        Outputs
+            x, y : (int) index
+        """
+    x = x[idx]
+    y = y[:, np.argsort(x)]
+    x = x[np.argsort(x)]
+    norm = np.trapz(y, x, axis=1)
+    y /= norm[:, None]
+
+    return x, y
 
 
 def make_sets(x1, x2, save=False, file_name=""):
@@ -236,13 +249,13 @@ def split_data(file, path_in):
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     
     # Splitting training and test sets
-    x1_train, x1_test, x2_train, x2_test = train_test_split(samples, H0, test_size=0.20, random_state=11)
+    x1_train, x1_test, x2_train, x2_test = train_test_split(samples, H0, test_size=0.10, random_state=11)
 
     # Test set in torch format
     x1_test, x2_test, y_test = make_sets(x1_test, x2_test, save=True, file_name=os.path.join(path_in, "test_set.hdf5"))
     
     # Splitting training and validation sets
-    x1_train, x1_val, x2_train, x2_val = train_test_split(x1_train, x2_train, test_size=0.25, random_state=11)
+    x1_train, x1_val, x2_train, x2_val = train_test_split(x1_train, x2_train, test_size=1/9, random_state=11)
 
     # Training set in torch format
     x1_train, x2_train, y_train = make_sets(x1_train, x2_train)
@@ -349,9 +362,10 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
             
             # loop on batches
             for x1, x2, y in dataloader:
+                x1 = gaussian_noise(x1)
                 x1 = x1.to(device, non_blocking=True).float()
                 x2 = x2.to(device, non_blocking=True).float()
-                y = y.to(device, non_blocking=True).float()
+                y = y.to(device, non_blocking=True).long()
                 
                 # training phase
                 if phase == 'train':
@@ -362,10 +376,10 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                     if anomaly_detection:
                         with autograd.detect_anomaly():
                             y_hat = model(x1, x2)
-                            loss = loss_fn(y_hat, y.long())
+                            loss = loss_fn(y_hat, y)
                     else:
                         y_hat = model(x1, x2)
-                        loss = loss_fn(y_hat, y.long())
+                        loss = loss_fn(y_hat, y)
                     
                     # Backward Pass
                     loss.backward()
@@ -379,7 +393,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                 else:
                     with torch.no_grad():
                         y_hat = model(x1, x2)
-                        loss = loss_fn(y_hat, y.long())
+                        loss = loss_fn(y_hat, y)
                 
                 # accuracy evaluation
                 acc = acc_fn(y_hat, y)
@@ -510,36 +524,17 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
     samples = np.delete(samples, idx_out, axis=0)
     nsamp = samples.shape[0]
 
-    # file to save (ok)
-    if os.path.isfile(path_out + "/posteriors.hdf5"):
-        os.remove(path_out + "/posteriors.hdf5")
-    post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
-
-    NRE_lc = post_file.create_group("NRE_local")
-    H0_lc = NRE_lc.create_dataset("H0", (nplot, npts), dtype='f')
-    post_lc = NRE_lc.create_dataset("posterior", (nplot, npts), dtype='f')
-
-    NRE_gb = post_file.create_group("NRE_global")
-    H0_gb = NRE_gb.create_dataset("H0", (nplot, npts), dtype='f')
-    post_gb = NRE_gb.create_dataset("posterior", (nplot, npts), dtype='f')
-
-    anltc = post_file.create_group("analytic")
-    H0_anl = anltc.create_dataset("H0", (nplot, nsamp), dtype='f')
-    post_anl = anltc.create_dataset("posterior", (nplot, nsamp), dtype='f')
-
-    truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
-
     # observations
     x = gaussian_noise(torch.from_numpy(samples))
     data = torch.repeat_interleave(x, npts, dim=0)
 
     # analytical posterior
-    analy_doub, analy_quad = analytical_likelihood(x.numpy(), samples)
-    H0_ = H0.flatten()
-    analy_ = analytic[:, np.argsort(H0_)]
-    H0_ = H0_[np.argsort(H0_)]
-    norm_ana = np.trapz(analy_, H0_, axis=1)
-    analy_ /= norm_ana[:, None]
+    ind2, ind4 = analytical_likelihood(x[:, :, 0].numpy(), samples[:, :, 0])
+    ndoub = len(ind2)
+    nquad = len(ind4)
+    #H0_ = H0.flatten()
+    #H0_doub, analy_doub = normalization(H0_, analy_doub, ind2)
+    #H0_quad, analy_quad = normalization(H0_, analy_quad, ind4)
 
     # Global NRE posterior
     gb_prior = torch.linspace(65, 75, npts)
@@ -577,14 +572,23 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
         interval[i] = np.trapz(interval_y, interval_x)
 
     it = 0
+    count_doub = 0
+    count_quad = 0
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            axes[i, j].plot(H0_, analy_[it], '--g', label="Analytic")
+            #if it in ind2:
+            #    axes[i, j].plot(H0_doub, analy_doub[count_doub], '--g', label="Analytic")
+                #analytic = analy_doub[count_doub]
+            #    count_doub += 1
+            #if it in ind4:
+            #    axes[i, j].plot(H0_quad, analy_quad[count_quad], '--g', label="Analytic")
+                #analytic = analy_quad[count_quad]
+            #    count_quad += 1
             axes[i, j].plot(gb_prior, gb_ratios[it], '-b', label='{:.2f}'.format(pred[it]))
-            min_post = np.minimum(np.min(gb_ratios[it]), np.min(analy_[it]))
-            max_post = np.maximum(np.max(gb_ratios[it]), np.max(analy_[it]))
-            axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
+            #min_post = np.minimum(np.min(gb_ratios[it]), np.min(analytic))
+            #max_post = np.maximum(np.max(gb_ratios[it]), np.max(analytic))
+            axes[i, j].vlines(true[it], np.min(gb_ratios[it]), np.max(gb_ratios[it]), colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
@@ -597,17 +601,41 @@ def inference(file_test, file_model, path_out, nrow=5, ncol=4, npts=1000):
             it += 1
 
     # saving
+    plt.rcParams['axes.facecolor'] = 'white'
+    plt.rcParams['savefig.facecolor'] = 'white'
+    plt.savefig(path_out + '/posteriors.png', bbox_inches='tight')
+
+    # file to save
+    if os.path.isfile(path_out + "/posteriors.hdf5"):
+        os.remove(path_out + "/posteriors.hdf5")
+    post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
+
+    NRE_lc = post_file.create_group("NRE_local")
+    H0_lc = NRE_lc.create_dataset("H0", (nplot, npts), dtype='f')
+    post_lc = NRE_lc.create_dataset("posterior", (nplot, npts), dtype='f')
+
+    NRE_gb = post_file.create_group("NRE_global")
+    H0_gb = NRE_gb.create_dataset("H0", (nplot, npts), dtype='f')
+    post_gb = NRE_gb.create_dataset("posterior", (nplot, npts), dtype='f')
+
+    anltc = post_file.create_group("analytic")
+    H0_anl2 = anltc.create_dataset("H0_doubles", (count_doub, ndoub), dtype='f')
+    post_anl2 = anltc.create_dataset("posterior_doubles", (count_doub, ndoub), dtype='f')
+    H0_anl4 = anltc.create_dataset("H0_quads", (count_quad, nquad), dtype='f')
+    post_anl4 = anltc.create_dataset("posterior_quads", (count_quad, nquad), dtype='f')
+
+    truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
+
     H0_lc[:, :] = lc_prior[:nplot]
     post_lc[:, :] = lc_ratios.reshape(nsamp, npts)[:nplot]
     H0_gb[:, :] = gb_prior[:nplot]
     post_gb[:, :] = gb_ratios[:nplot]
-    H0_anl[:, :] = np.tile(H0_, (nplot, 1))
-    post_anl[:, :] = analy_[:nplot]
+    #H0_anl2[:, :] = np.tile(H0_doub, (count_doub, 1))
+    #post_anl2[:, :] = analy_doub[:count_doub]
+    #H0_anl4[:, :] = np.tile(H0_quad, (count_quad, 1))
+    #post_anl4[:, :] = analy_quad[:count_quad]
     truth_set[:] = true[:nplot]
 
-    plt.rcParams['axes.facecolor'] = 'white'
-    plt.rcParams['savefig.facecolor'] = 'white'
-    plt.savefig(path_out + '/posteriors.png', bbox_inches='tight')
     post_file.close()
 
     # Coverage diagnostic

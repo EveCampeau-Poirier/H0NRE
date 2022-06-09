@@ -603,10 +603,6 @@ class training_set(object):
         time_delays = (1 + zd) * Dd * Ds / Dds / c.value * (fermat_pot - np.min(fermat_pot))
         time_delays *= (2 * np.pi / 360 / 3600) ** 2 # Conversion to days
 
-        if len(fermat_pot) == 2:
-            pad = -np.ones((2))
-            time_delays = np.concatenate((time_delays, pad), axis=None)
-
         return time_delays
 
     # ----------------------------------- Tests ------------------------------------
@@ -840,16 +836,17 @@ class training_set(object):
                 set_im[it, :] = im.reshape(1, self.npix, self.npix)
                 set_param[it, :] = param
                 set_shft[it, :] = np.array([zd, zs])
-                set_dt[it, :] = time_delays
                 if len(fermat_pot) == 2:
                     pad = -np.ones((2))
                     fermat_pot = np.concatenate((fermat_pot - np.min(fermat_pot), pad), axis=None)
                     xim = np.concatenate((xim, pad), axis=None)
                     yim = np.concatenate((yim, pad), axis=None)
+                    time_delays = np.concatenate((time_delays, pad), axis=None)
                     set_pot[it, :] = fermat_pot
                 else:
                     set_pot[it, :] = fermat_pot - np.min(fermat_pot)
                 set_pos[it, :] = np.array([xim, yim])
+                set_dt[it, :] = time_delays
                 set_H0[it, :] = np.array([H0])
 
             it += 1  # update iteration

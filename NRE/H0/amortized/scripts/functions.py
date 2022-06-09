@@ -6,8 +6,12 @@ import h5py
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FormatStrFormatter
-from sklearn.model_selection import train_test_split
+
+from astropy.cosmology import FlatLambdaCDM
+from astropy.constants import c
+from astropy import units as u
+
+from simulator import get_time_delays
 
 # PyTorch libraries
 import torch
@@ -67,7 +71,7 @@ def gaussian_noise(x, sig_dt=.4):
     return noisy_data
 
 
-def analytical_likelihood(x, mu, sigma=.4):
+def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
     """
     Computes the analytical likelihood
     Inputs
@@ -78,9 +82,26 @@ def analytical_likelihood(x, mu, sigma=.4):
         lkh_doub : (tensor)[nbr of doubles x nbr of doubles] Likelihood on doubles
         lkh_quad : (tensor)[nbr of quads x nbr of quads] Likelihood on quads
     """
-    count = np.count_nonzero(x + 1, axis=1)
+    nsamp = dt.shape[0]
+    npoints = H0.shape[0]
+    mu = np.zeros(nsamp, npoints, 4)
+    pad = -np.ones((2))
 
-    if np.any(count == 2):
+    for i in range(nsamp):
+        for j in range(npoints):
+            fermat = pot[i]
+            fermat = fermat[fermat != -1]
+            cosmo_model = FlatLambdaCDM(H0=H0[i], Om0=.3)
+            Ds = cosmo_model.angular_diameter_distance(zs[i])
+            Dd = cosmo_model.angular_diameter_distance(zd[i])
+            Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
+            qqch = get_time_delays([zs[i], zd[i], Ds, Dd, Dds, 0, H0[i]], [0, 0, 0, fermat])
+            if len(fermat) == 2 :
+                qqch = np.concatenate((qqch, pad), axis=None)
+            mu[i,j] = qqch
+
+    count = np.count_nonzero(dt + 1, axis=1)
+    if count[i] == 2:
         ind2 = np.where(count == 2)[0]
         #lkh_doub = np.exp(-np.sum((x[ind2][:, None] - mu[ind2][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
         #            2 * np.pi * sigma ** 2)
@@ -539,14 +560,6 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     x = gaussian_noise(torch.from_numpy(samples))
     data = torch.repeat_interleave(x, npts, dim=0)
 
-    # analytical posterior
-    ind2, ind4 = analytical_likelihood(x[:, :, 0].numpy(), samples[:, :, 0])
-    ndoub = len(ind2)
-    nquad = len(ind4)
-    #H0_ = H0.flatten()
-    #H0_doub, analy_doub = normalization(H0_, analy_doub, ind2)
-    #H0_quad, analy_quad = normalization(H0_, analy_quad, ind4)
-
     # Global NRE posterior
     gb_prior = torch.linspace(65, 75, npts).reshape(npts, 1)
     gb_pr_tile = torch.tile(gb_prior, (nsamp, 1))
@@ -581,6 +594,14 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
         interval_x = np.delete(gb_prior.flatten(), idx_out)
         interval_y = np.delete(gb_ratios[i], idx_out)
         interval[i] = np.trapz(interval_y, interval_x)
+
+        # analytical posterior
+        ind2, ind4 = analytical_likelihood(x[:, :, 0].numpy(), samples[:, :, 0])
+        ndoub = len(ind2)
+        nquad = len(ind4)
+        # H0_ = H0.flatten()
+        # H0_doub, analy_doub = normalization(H0_, analy_doub, ind2)
+        # H0_quad, analy_quad = normalization(H0_, analy_quad, ind4)
 
     it = 0
     count_doub = 0

@@ -8,8 +8,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from astropy.cosmology import FlatLambdaCDM
-from astropy.constants import c
-from astropy import units as u
 
 from simulator import get_time_delays
 
@@ -95,27 +93,15 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
             Ds = cosmo_model.angular_diameter_distance(zs[i])
             Dd = cosmo_model.angular_diameter_distance(zd[i])
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-            qqch = get_time_delays([zs[i], zd[i], Ds, Dd, Dds, 0, H0[i]], [0, 0, 0, fermat])
+            sim = get_time_delays([zs[i], zd[i], Ds, Dd, Dds, 0, H0[i]], [0, 0, 0, fermat])
             if len(fermat) == 2 :
-                qqch = np.concatenate((qqch, pad), axis=None)
-            mu[i,j] = qqch
+                sim = np.concatenate((sim, pad), axis=None)
+            mu[i, j] = sim
 
-    count = np.count_nonzero(dt + 1, axis=1)
-    if count[i] == 2:
-        ind2 = np.where(count == 2)[0]
-        #lkh_doub = np.exp(-np.sum((x[ind2][:, None] - mu[ind2][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
-        #            2 * np.pi * sigma ** 2)
-    #else:
-    #    lkh_doub = np.empty(0)
+    size = np.count_nonzero(dt + 1, axis=1)
+    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** size[:, None]
 
-    if np.any(count == 4):
-        ind4 = np.where(count == 4)[0]
-        #lkh_quad = np.exp(-np.sum((x[ind4][:, None] - mu[ind4][None]) ** 2, axis=2) / 2 / sigma ** 2) / (
-        #            2 * np.pi * sigma ** 2) ** 2
-    #else:
-    #    lkh_quad = np.empty(0)
-
-    return ind2, ind4
+    return lkh
 
 
 def r_estimator(model, x1, x2):

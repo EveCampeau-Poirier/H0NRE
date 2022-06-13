@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 
 from astropy.cosmology import FlatLambdaCDM
 
-from simulator import get_time_delays
+from simulator import training_set
+ts = training_set()
 
 # PyTorch libraries
 import torch
@@ -77,24 +78,23 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
         mu : (array)[test set size x 4] True time delays
         sigma : (float) noise standard deviation on time delays
     Outputs
-        lkh_doub : (tensor)[nbr of doubles x nbr of doubles] Likelihood on doubles
-        lkh_quad : (tensor)[nbr of quads x nbr of quads] Likelihood on quads
+        lkh_doub : (tensor)[nsamp x npts] Likelihood
     """
     nsamp = dt.shape[0]
-    npoints = H0.shape[0]
-    mu = np.zeros(nsamp, npoints, 4)
+    npts = H0.shape[0]
+    mu = np.zeros((nsamp, npts, 4))
     pad = -np.ones((2))
 
     for i in range(nsamp):
-        for j in range(npoints):
+        for j in range(npts):
             fermat = pot[i]
             fermat = fermat[fermat != -1]
-            cosmo_model = FlatLambdaCDM(H0=H0[i], Om0=.3)
+            cosmo_model = FlatLambdaCDM(H0=H0[j], Om0=.3)
             Ds = cosmo_model.angular_diameter_distance(zs[i])
             Dd = cosmo_model.angular_diameter_distance(zd[i])
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-            sim = get_time_delays([zs[i], zd[i], Ds, Dd, Dds, 0, H0[i]], [0, 0, 0, fermat])
-            if len(fermat) == 2 :
+            sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, fermat])
+            if len(fermat) == 2:
                 sim = np.concatenate((sim, pad), axis=None)
             mu[i, j] = sim
 
@@ -168,23 +168,19 @@ def index_probe(theta, labels, probe, dependence=True):
     return idx
 
 
-def normalization(x, y, idx):
+def normalization(x, y):
     """
-        Sorts H0 values associated with doubles or quads, then normalizes the analytical posterior
+        Normalizes the analytical posterior
         Inputs
-            x : (tensor) H0 values
-            y : (tensor) posterior probabilities
-            idx : (float)
+            x : (array) H0 values
+            y : (array) posterior probabilities
         Outputs
-            x, y : (int) index
+            y : (array) Norm
         """
-    x = x[idx]
-    y = y[:, np.argsort(x)]
-    x = x[np.argsort(x)]
     norm = np.trapz(y, x, axis=1)
     y /= norm[:, None]
 
-    return x, y
+    return y
 
 
 def make_classes(x1, x2):
@@ -238,9 +234,9 @@ def split_data(file, path_in):
     nsamp = samples.shape[0]
     keys = np.arange(nsamp)
     train_keys = np.random.choice(keys, size=int(.8*nsamp), replace=False)
-    keys = np.delete(keys, train_keys, axis=0)
-    valid_keys = np.random.choice(keys, size=int(.1*nsamp), replace=False)
-    keys = np.delete(keys, valid_keys, axis=0)
+    left_keys = np.setdiff1d(keys, train_keys)
+    valid_keys = np.random.choice(left_keys, size=int(.1*nsamp), replace=False)
+    test_keys = np.setdiff1d(left_keys, valid_keys)
 
     x1_train, x2_train = samples[train_keys], H0[train_keys]
     x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
@@ -248,13 +244,13 @@ def split_data(file, path_in):
     # Saving keys
     if os.path.isfile(path_in+'/keys.hdf5'):
         os.remove(path_in+'/keys.hdf5')
-    keys_file = h5py.File('keys.hdf5', 'a')
+    keys_file = h5py.File(path_in+'/keys.hdf5', 'a')
     train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
     valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
-    test_ids = keys_file.create_dataset("test", keys.shape, dtype='i')
+    test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
     train_ids[:] = train_keys
     valid_ids[:] = valid_keys
-    test_ids[:] = keys
+    test_ids[:] = test_keys
 
     # Making labels + torch format
     x1_train, x2_train, y_train = make_classes(x1_train, x2_train)
@@ -518,7 +514,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
         train_set : (list) training set. Corresponds to 80% of all data.
         valid_set : (list) validation set. Corresponds to 10% of all data.
     """
-    model = torch.load(file_model)
+    model = torch.load(file_model, map_location='cpu')
     nplot = int(nrow * ncol)
 
     # import keys
@@ -537,7 +533,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     test_keys = np.delete(test_keys, idx_out, axis=0)
     dt = dataset["time_delays"][test_keys]
     pot = dataset["Fermat_potential"][test_keys]
-    redshifts = dataset["redshifts"][test_keys]
+    z = dataset["redshifts"][test_keys]
     dataset.close()
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     nsamp = samples.shape[0]
@@ -547,66 +543,40 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     data = torch.repeat_interleave(x, npts, dim=0)
 
     # Global NRE posterior
-    gb_prior = torch.linspace(65, 75, npts).reshape(npts, 1)
-    gb_pr_tile = torch.tile(gb_prior, (nsamp, 1))
+    gb_prior = np.linspace(65, 75, npts).reshape(npts, 1)
+    gb_pr_tile = np.tile(gb_prior, (nsamp, 1))
+    gb_ratios = r_estimator(model, data, torch.from_numpy(gb_pr_tile))
 
-    gb_ratios = r_estimator(model, data, gb_pr_tile)
     gb_ratios = gb_ratios.reshape(nsamp, npts)
-    norm_gb = np.trapz(gb_ratios, gb_pr_tile.reshape(nsamp, npts), axis=1)
-    gb_ratios /= norm_gb[:, None]
+    gb_ratios = normalization(gb_pr_tile.reshape(nsamp, npts), gb_ratios)
 
     # local NRE posterior
+    gb_prior = gb_prior.flatten()
     lc_prior = torch.zeros((nsamp, npts))
     true = np.zeros((nsamp,))
     for i in range(nsamp):
         true[i] = float(H0[i])
-        max_prob = np.max(gb_ratios[i])
+        max_prob = gb_prior[np.argmax(gb_ratios[i])]
         lc_prior[i] = torch.linspace(max_prob - 1., max_prob + 1., npts)
     lc_ratios = r_estimator(model, data, lc_prior.reshape(npts * nsamp, 1))
 
     # predictions
     arg_pred = np.argmax(lc_ratios.reshape(nsamp, npts), axis=1)
-    samp_idx = np.arange(0, nsamp)
-    pred = lc_prior[samp_idx, arg_pred]
+    pred = lc_prior[np.arange(nsamp), arg_pred].detach().cpu().numpy()
 
-    # integration from pred to true
-    start = np.minimum(true, pred)
-    end = np.maximum(true, pred)
-    interval = np.zeros((nsamp,))
-    for i in range(nsamp):
-        idx_up = np.where(gb_prior.flatten() > end[i])[0]
-        idx_down = np.where(gb_prior.flatten() < start[i])[0]
-        idx_out = np.concatenate((idx_up, idx_down))
-        interval_x = np.delete(gb_prior.flatten(), idx_out)
-        interval_y = np.delete(gb_ratios[i], idx_out)
-        interval[i] = np.trapz(interval_y, interval_x)
-
-        # analytical posterior
-        ind2, ind4 = analytical_likelihood(x[:, :, 0].numpy(), samples[:, :, 0])
-        ndoub = len(ind2)
-        nquad = len(ind4)
-        # H0_ = H0.flatten()
-        # H0_doub, analy_doub = normalization(H0_, analy_doub, ind2)
-        # H0_quad, analy_quad = normalization(H0_, analy_quad, ind4)
+    # analytical posterior
+    analytic = analytical_likelihood(x[:,:,0].numpy(), x[:,:,1].numpy(), gb_prior, z[:, 1], z[:, 0])
+    analytic = normalization(gb_prior, analytic)
 
     it = 0
-    count_doub = 0
-    count_quad = 0
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            #if it in ind2:
-            #    axes[i, j].plot(H0_doub, analy_doub[count_doub], '--g', label="Analytic")
-                #analytic = analy_doub[count_doub]
-            #    count_doub += 1
-            #if it in ind4:
-            #    axes[i, j].plot(H0_quad, analy_quad[count_quad], '--g', label="Analytic")
-                #analytic = analy_quad[count_quad]
-            #    count_quad += 1
+            axes[i, j].plot(gb_prior, analytic[it], '--g', label="Analytic")
             axes[i, j].plot(gb_prior, gb_ratios[it], '-b', label='{:.2f}'.format(pred[it]))
-            #min_post = np.minimum(np.min(gb_ratios[it]), np.min(analytic))
-            #max_post = np.maximum(np.max(gb_ratios[it]), np.max(analytic))
-            axes[i, j].vlines(true[it], np.min(gb_ratios[it]), np.max(gb_ratios[it]), colors='r', linestyles='dotted',
+            min_post = np.minimum(np.min(gb_ratios[it]), np.min(analytic[it]))
+            max_post = np.maximum(np.max(gb_ratios[it]), np.max(analytic[it]))
+            axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
@@ -633,28 +603,32 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     post_lc = NRE_lc.create_dataset("posterior", (nplot, npts), dtype='f')
 
     NRE_gb = post_file.create_group("NRE_global")
-    H0_gb = NRE_gb.create_dataset("H0", (nplot, npts), dtype='f')
+    H0_gb = NRE_gb.create_dataset("H0", (nsamp,), dtype='f')
     post_gb = NRE_gb.create_dataset("posterior", (nplot, npts), dtype='f')
-
-    anltc = post_file.create_group("analytic")
-    H0_anl2 = anltc.create_dataset("H0_doubles", (count_doub, ndoub), dtype='f')
-    post_anl2 = anltc.create_dataset("posterior_doubles", (count_doub, ndoub), dtype='f')
-    H0_anl4 = anltc.create_dataset("H0_quads", (count_quad, nquad), dtype='f')
-    post_anl4 = anltc.create_dataset("posterior_quads", (count_quad, nquad), dtype='f')
+    post_anl = NRE_gb.create_dataset("analytical", (nplot, npts), dtype='f')
 
     truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
 
     H0_lc[:, :] = lc_prior[:nplot]
     post_lc[:, :] = lc_ratios.reshape(nsamp, npts)[:nplot]
-    H0_gb[:, :] = gb_prior[:nplot]
+    H0_gb[:] = gb_prior[:nplot]
     post_gb[:, :] = gb_ratios[:nplot]
-    #H0_anl2[:, :] = np.tile(H0_doub, (count_doub, 1))
-    #post_anl2[:, :] = analy_doub[:count_doub]
-    #H0_anl4[:, :] = np.tile(H0_quad, (count_quad, 1))
-    #post_anl4[:, :] = analy_quad[:count_quad]
+    post_anl[:, :] = analytic[:nplot]
     truth_set[:] = true[:nplot]
 
     post_file.close()
+
+    # integration from pred to true
+    start = np.minimum(true, pred)
+    end = np.maximum(true, pred)
+    interval = np.zeros((nsamp,))
+    for i in range(nsamp):
+        idx_up = np.where(gb_prior > end[i])[0]
+        idx_down = np.where(gb_prior < start[i])[0]
+        idx_out = np.concatenate((idx_up, idx_down))
+        interval_x = np.delete(gb_prior, idx_out)
+        interval_y = np.delete(gb_ratios[i], idx_out)
+        interval[i] = np.trapz(interval_y, interval_x)
 
     # Coverage diagnostic
     bins = np.linspace(0., 1., 100)

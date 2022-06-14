@@ -670,7 +670,7 @@ class training_set(object):
 
     # ------------------------------ Training examples -----------------------------
 
-    def generate(self, fig=np.zeros((8)), savefig=np.zeros((8)), save=True, test=False):
+    def generate(self, lower_bound, upper_bound, fig=np.zeros((8)), savefig=np.zeros((8)), save=True, test=False):
         """Generates training examples"""
 
         # Opening files
@@ -692,7 +692,10 @@ class training_set(object):
 
             ### Cosmology
             # Hubble constant (km/s/Mpc)
-            H0 = np.random.uniform(64., 76.)
+            if lower_bound == upper_bound:
+                H0 = lower_bound
+            else:
+                H0 = np.random.uniform(lower_bound, upper_bound)
             # Cosmological model
             cosmo_model = FlatLambdaCDM(H0=H0, Om0=.3)
 

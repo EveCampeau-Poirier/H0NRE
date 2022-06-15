@@ -73,4 +73,5 @@ if __name__ == "__main__":
     
     plot_results(os.path.join(args.path_out, "logs.hdf5"), os.path.join(args.path_out, "plots"))
     
-    inference(os.path.join(args.path_in, "test_set.hdf5"), args.path_out+"/models/"+"trained_model.pt", os.path.join(args.path_out, "plots"))
+    inference(os.path.join(args.path_in, "keys.hdf5"), os.path.join(args.path_in, args.data_file),
+              args.path_out+"/models/"+"trained_model.pt", os.path.join(args.path_out, "plots"))

@@ -505,14 +505,14 @@ def plot_results(file, path_out):
     
 def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1000):
     """
-    Reads data, generates classes and splits data into training, validation and test sets
+    Computes the NRE posterior, the analytical posterior and performs the coverage diagnostic
     Inputs
-        file : (str) name of the file containing data
-        path_in : (str) file's directory
+        file_keys : (str) name of the file containing the keys of the test set
+        file_data : (str) name of the file containing data
+        file_model : (str) name of the file containing the model
+        path_out : (str) directory where to save the output
     Outputs
-        All outputs are a list of the time delays, the Fermat potential, the H0 and the labels tensors
-        train_set : (list) training set. Corresponds to 80% of all data.
-        valid_set : (list) validation set. Corresponds to 10% of all data.
+        None
     """
     model = torch.load(file_model, map_location='cpu')
     nplot = int(nrow * ncol)
@@ -536,6 +536,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     z = dataset["redshifts"][test_keys]
     dataset.close()
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    samples = samples[:1000]
     nsamp = samples.shape[0]
 
     # observations
@@ -611,7 +612,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
 
     H0_lc[:, :] = lc_prior[:nplot]
     post_lc[:, :] = lc_ratios.reshape(nsamp, npts)[:nplot]
-    H0_gb[:] = gb_prior[:nplot]
+    H0_gb[:] = gb_prior
     post_gb[:, :] = gb_ratios[:nplot]
     post_anl[:, :] = analytic[:nplot]
     truth_set[:] = true[:nplot]
@@ -646,4 +647,62 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     plt.text(.65, .05, "Overconfident")
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
-    plt.savefig(path_out + '/coverage.png', bbox_inches='tight', dpi=300)
+    plt.savefig(path_out + '/coverage.png', bbox_inches='tight')
+
+
+def joint_inference(file_data, file_model, path_out, npts=1000):
+    """
+        Performs the joint inference on a population of lenses
+        Inputs
+            file_data : (str) name of the file containing data
+            file_model : (str) name of the file containing the model
+            path_out : (str) directory where to save the output
+        Outputs
+            None
+    """
+    model = torch.load(file_model, map_location='cpu')
+
+    # import data
+    dataset = h5py.File(file_data, 'r')
+    H0 = dataset["Hubble_cst"][:]
+    dt = dataset["time_delays"][:]
+    pot = dataset["Fermat_potential"][:]
+    dataset.close()
+    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2);
+    nsamp = samples.shape[0]
+    true = float(np.unique(H0))
+
+    # observations
+    x = gaussian_noise(torch.from_numpy(samples))
+    data = torch.repeat_interleave(x, npts, dim=0)
+
+    # Global NRE posterior
+    prior = np.linspace(65, 75, npts).reshape(npts, 1)
+    prior_tile = np.tile(prior, (nsamp, 1))
+    prior = prior.flatten()
+    post = r_estimator(model, data, torch.from_numpy(prior_tile))
+
+    post = post.reshape(nsamp, npts)
+    post = normalization(prior_tile.reshape(nsamp, npts), post)
+
+    post[0] *= 1000
+    joint1 = np.prod(np.log(post[:10]), axis=0)
+    joint1 -= np.trapz(joint1, prior)
+    joint2 = np.sum(np.log(post[:100]), axis=0)
+    joint2 -= np.trapz(joint2, prior)
+    post[0] *= 1e30
+    joint3 = np.prod(post[:1000], axis=0)
+    joint3 /= np.trapz(joint3, prior)
+    joints = np.concatenate((joint1[:, None], joint2[:, None], joint3[:, None]), axis=1)
+
+    plt.figure()
+    #plt.plot(prior, joint1, '-b', label='10 lenses')
+    #plt.plot(prior, joint2, '--r', label='100 lenses')
+    plt.plot(prior, joint3, '-.g', label='1000 lenses')
+    min_post = np.min(joints)
+    max_post = np.max(joints)
+    #plt.vlines(true, min_post, max_post, colors='k', linestyles='dotted', label='{:.2f}'.format(true))
+    plt.legend()
+    plt.rcParams['axes.facecolor'] = 'white'
+    plt.rcParams['savefig.facecolor'] = 'white'
+    plt.savefig(path_out + '/inference.png', bbox_inches='tight')

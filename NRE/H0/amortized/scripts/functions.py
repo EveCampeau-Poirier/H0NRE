@@ -97,11 +97,10 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
             if len(fermat) == 2:
                 sim = np.concatenate((sim, pad), axis=None)
             mu[i, j] = sim
-
     size = np.count_nonzero(dt + 1, axis=1)
-    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** size[:, None]
+    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size[:, None] / 2)
 
-    return lkh
+    return mu, lkh
 
 
 def log_trick(logp):
@@ -546,8 +545,8 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     dataset = h5py.File(file_data, 'r')
     H0 = dataset["Hubble_cst"][test_keys]
     # remove out of bounds data
-    idx_up = np.where(H0 >= 75)[0]
-    idx_down = np.where(H0 <= 65)[0]
+    idx_up = np.where(H0 > 73.)[0]
+    idx_down = np.where(H0 < 67.)[0]
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
     test_keys = np.delete(test_keys, idx_out, axis=0)
@@ -586,7 +585,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     pred = lc_prior[np.arange(nsamp), arg_pred].detach().cpu().numpy()
 
     # analytical posterior
-    analytic = analytical_likelihood(x[:,:,0].numpy(), x[:,:,1].numpy(), gb_prior, z[:, 1], z[:, 0])
+    analytic = analytical_likelihood(x[:, :, 0].numpy(), x[:, :, 1].numpy(), gb_prior, z[:, 1], z[:, 0])
     analytic = normalization(gb_prior, analytic)
 
     it = 0
@@ -600,6 +599,10 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
             axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
+            if np.count_nonzero(samples[it, 0] + 1) == 4:
+                axes[i, j].set_title("Quad")
+            if np.count_nonzero(samples[it, 0] + 1) == 2:
+                axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
 
             if i == int(nrow - 1):

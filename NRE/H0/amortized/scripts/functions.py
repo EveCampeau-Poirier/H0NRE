@@ -17,6 +17,8 @@ import torch
 from torch.nn.utils import clip_grad_norm_
 from torch import autograd
 
+torch.manual_seed(0)
+np.random.seed(0)
 
 # --- Functions for training -----------------------------------------------
 
@@ -52,7 +54,7 @@ def noise(x, expo_time=1000, sig_bg=.001):
     return noisy_im
 
 
-def gaussian_noise(x, sig_dt=.4):
+def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     """
     Adds noise to time delays
     Inputs
@@ -64,8 +66,10 @@ def gaussian_noise(x, sig_dt=.4):
     mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)
     mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
     noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
+    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
     noisy_data = x.clone()
     noisy_data[:, :, 0] += noise_dt * mask_zero * mask_pad
+    noisy_data[:, :, 1] += noise_pot * mask_zero * mask_pad
 
     return noisy_data
 
@@ -183,10 +187,10 @@ def normalization(x, y):
     return y
 
 
-def make_classes(x1, x2):
+def make_classes(x1, x2, lower_bound, higher_bound):
     """
     Creates labels, shuffles data
-    Inputs 
+    Inputs
         x1 : (array) [nexamp x 4 x 2] data tensor
         x2 : (array) [nexamp x 1] H_0 tensor
     Outputs
@@ -195,26 +199,26 @@ def make_classes(x1, x2):
         y : (tensor) [nexamp x 1] label tensor
     """
     nsamp = x1.shape[0]
-    nclass = int(nsamp/2)
-    if nsamp %2 == 0:
-        x2[nclass:] = np.random.uniform(64., 76., size=(nclass, 1))
+    nclass = int(nsamp / 2)
+    if nsamp % 2 == 0:
+        x2[nclass:] = np.random.uniform(lower_bound, higher_bound, size=(nclass, 1))
         y = np.concatenate((np.ones(nclass), np.zeros(nclass)))
     else:
-        x2[nclass+1:] = np.random.uniform(64., 76., size=(nclass, 1))
-        y = np.concatenate((np.ones(nclass+1), np.zeros(nclass)))
-                            
+        x2[nclass + 1:] = np.random.uniform(lower_bound, higher_bound, size=(nclass, 1))
+        y = np.concatenate((np.ones(nclass + 1), np.zeros(nclass)))
+
     shuffle = np.random.choice(nsamp, nsamp, replace=False)
     x1 = torch.from_numpy(x1[shuffle])
     x2 = torch.from_numpy(x2[shuffle])
     y = torch.from_numpy(y[shuffle])
-                       
+
     return x1, x2, y
 
 
 def split_data(file, path_in):
     """
     Reads data, generates classes and splits data into training, validation and test sets
-    Inputs 
+    Inputs
         file : (str) name of the file containing data
         path_in : (str) file's directory
     Outputs
@@ -229,41 +233,43 @@ def split_data(file, path_in):
     H0 = dataset["Hubble_cst"][:]
     dataset.close()
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    lower_bound = np.floor(np.min(H0))
+    higher_bound = np.ceil(np.max(H0))
 
     # Splitting sets
     nsamp = samples.shape[0]
     keys = np.arange(nsamp)
-    train_keys = np.random.choice(keys, size=int(.8*nsamp), replace=False)
+    train_keys = np.random.choice(keys, size=int(.8 * nsamp), replace=False)
     left_keys = np.setdiff1d(keys, train_keys)
-    valid_keys = np.random.choice(left_keys, size=int(.1*nsamp), replace=False)
+    valid_keys = np.random.choice(left_keys, size=int(.1 * nsamp), replace=False)
     test_keys = np.setdiff1d(left_keys, valid_keys)
 
     x1_train, x2_train = samples[train_keys], H0[train_keys]
     x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
 
     # Saving keys
-    if os.path.isfile(path_in+'/keys.hdf5'):
-        os.remove(path_in+'/keys.hdf5')
-    keys_file = h5py.File(path_in+'/keys.hdf5', 'a')
-    train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
-    valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
-    test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
-    train_ids[:] = train_keys
-    valid_ids[:] = valid_keys
-    test_ids[:] = test_keys
+    if not os.path.isfile(path_in + '/keys.hdf5'):
+        # os.remove(path_in+'/keys.hdf5')
+        keys_file = h5py.File(path_in + '/keys.hdf5', 'a')
+        train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
+        valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
+        test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
+        train_ids[:] = train_keys
+        valid_ids[:] = valid_keys
+        test_ids[:] = test_keys
 
     # Making labels + torch format
-    x1_train, x2_train, y_train = make_classes(x1_train, x2_train)
-    x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid)
-    
+    x1_train, x2_train, y_train = make_classes(x1_train, x2_train, lower_bound, higher_bound)
+    x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid, lower_bound, higher_bound)
+
     # Outputs
     train_set = [x1_train, x2_train, y_train]
     valid_set = [x1_valid, x2_valid, y_valid]
-    
+
     return train_set, valid_set
 
 
-def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=None, 
+def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=None, threshold=None,
              grad_clip=None, anomaly_detection=False, batch_size=128, epochs=60, probe=70):
     """
     Manages the training
@@ -413,7 +419,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                 train_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
                 train_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
                 train_lr[epoch, :] = epoch_lr
-                if sched is not None:
+                if sched is not None and epoch < threshold:
                     sched.step()
             else:
                 valid_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
@@ -514,7 +520,10 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     Outputs
         None
     """
-    model = torch.load(file_model, map_location='cpu')
+    if torch.cuda.is_available():
+        model = torch.load(file_model)
+    else:
+        model = torch.load(file_model, map_location="cpu")
     nplot = int(nrow * ncol)
 
     # import keys
@@ -525,9 +534,11 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     # import data
     dataset = h5py.File(file_data, 'r')
     H0 = dataset["Hubble_cst"][test_keys]
+    lower_bound = np.floor(np.min(H0))
+    higher_bound = np.ceil(np.max(H0))
     # remove out of bounds data
-    idx_up = np.where(H0 >= 75)[0]
-    idx_down = np.where(H0 <= 65)[0]
+    idx_up = np.where(H0 > 75.)[0]
+    idx_down = np.where(H0 < 65.)[0]
     idx_out = np.concatenate((idx_up, idx_down))
     H0 = np.delete(H0, idx_out, axis=0)
     test_keys = np.delete(test_keys, idx_out, axis=0)
@@ -544,7 +555,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     data = torch.repeat_interleave(x, npts, dim=0)
 
     # Global NRE posterior
-    gb_prior = np.linspace(65, 75, npts).reshape(npts, 1)
+    gb_prior = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     gb_pr_tile = np.tile(gb_prior, (nsamp, 1))
     gb_ratios = r_estimator(model, data, torch.from_numpy(gb_pr_tile))
 

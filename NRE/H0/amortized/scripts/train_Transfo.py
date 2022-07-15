@@ -13,11 +13,11 @@ from torch.optim.lr_scheduler import StepLR
 from functions import acc_fct, train_fn, plot_results, inference
 
 # Model
-from classifier import DeepSets
+from SetTransformer import SetTransformer
 
 # --- Execution ------------------------------------------------------------
 if __name__ == "__main__":
-
+    
     # --- Training ---------------------------------------------------------
     parser = argparse.ArgumentParser(description="Train a classifier to be an estimator of the likelihood ratio of H_0")
     parser.add_argument("--path_in", type=str, default="", help="path to data")
@@ -29,32 +29,31 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
     parser.add_argument("--nepochs", type=int, default=100, help="number of training epochs")
     parser.add_argument("--probe", type=float, default=70, help="likelihood ratio probes")
-
+    
     args = parser.parse_args()
-
+    
     # Path management
-    if not os.path.exists(os.path.join(args.path_out, "models")):
+    if not os.path.exists(os.path.join(args.path_out, "models")): 
         os.makedirs(os.path.join(args.path_out, "models"))
-    if not os.path.exists(os.path.join(args.path_out, "plots")):
+    if not os.path.exists(os.path.join(args.path_out, "plots")): 
         os.makedirs(os.path.join(args.path_out, "plots"))
-
+    
     # Hyperparameters
-    if os.path.isfile(args.path_hyper + "/hyparams.txt"):
-        freq, factor, thresh = np.loadtxt(args.path_hyper + "/hyparams.txt", unpack=True)
+    if os.path.isfile(args.path_hyper+"/hyparams.txt"):
+        freq, factor, thresh = np.loadtxt(args.path_hyper+"/hyparams.txt", unpack=True)
         p_drop, L2, rate, max_norm = 0., 0., 1e-4, None
     else:
         p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .5, args.nepochs
-
-    nn = DeepSets()
+    
+    nn = SetTransformer()
     loss_fct = CrossEntropyLoss()
     opt = Adamax(nn.parameters(), lr=rate, weight_decay=L2)
-
+    
     # Scheduler
     if args.sched:
         scheduler = StepLR(opt, step_size=freq, gamma=factor)
-    else:
-        scheduler = None
-
+    else: scheduler = None
+    
     train_fn(model=nn,
              file=args.data_file,
              path_in=args.path_in,
@@ -69,13 +68,13 @@ if __name__ == "__main__":
              batch_size=args.batch_size,
              epochs=args.nepochs,
              probe=args.probe)
-
+    
     # --- Results ----------------------------------------------------------
-
+    
     # **Save model**
-    torch.save(nn, args.path_out + "/models/" + "trained_model.pt")
-
+    torch.save(nn, args.path_out+"/models/"+"trained_model.pt")
+    
     plot_results(os.path.join(args.path_out, "logs.hdf5"), os.path.join(args.path_out, "plots"))
-
+    
     inference(os.path.join(args.path_in, "keys.hdf5"), os.path.join(args.path_in, args.data_file),
-              args.path_out + "/models/" + "trained_model.pt", os.path.join(args.path_out, "plots"))
+              args.path_out+"/models/"+"trained_model.pt", os.path.join(args.path_out, "plots"))

@@ -10,25 +10,25 @@ class DeepSets(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Linear(2, nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(nheads, nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(nheads, nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(nheads, nfeat)
         )
 
         self.decoder = nn.Sequential(
             nn.Linear(nfeat + 1, 2*nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(2*nheads, 2*nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(2*nheads, 2*nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(2*nheads, 2*nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(2*nheads, 2*nheads),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(2*nheads, 2)
         )
 

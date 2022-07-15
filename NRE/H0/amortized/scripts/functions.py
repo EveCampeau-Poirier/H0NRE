@@ -107,6 +107,21 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
 
     return lkh
 
+def log_trick(logp):
+    """
+    Compute the log-trick for numerical stability
+    Inputs :
+      log_p : log of a quantity to sum in a log
+    Outputs :
+      trick : stabilization term
+    """
+    max = np.amax(logp)
+    ind_max = np.argmax(logp)
+    logp = np.delete(logp,ind_max)
+    trick = max + np.log(1 + np.sum(np.exp(logp - max)))
+
+    return trick
+
 
 def r_estimator(model, x1, x2):
     """
@@ -419,7 +434,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
                 train_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
                 train_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
                 train_lr[epoch, :] = epoch_lr
-                if sched is not None and epoch < threshold:
+                if sched is not None and epoch <= threshold:
                     sched.step()
             else:
                 valid_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
@@ -577,7 +592,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     pred = lc_prior[np.arange(nsamp), arg_pred].detach().cpu().numpy()
 
     # analytical posterior
-    analytic = analytical_likelihood(x[:,:,0].numpy(), x[:,:,1].numpy(), gb_prior, z[:, 1], z[:, 0])
+    analytic = analytical_likelihood(x[:, :, 0].numpy(), x[:, :, 1].numpy(), gb_prior, z[:, 1], z[:, 0])
     analytic = normalization(gb_prior, analytic)
 
     it = 0
@@ -591,6 +606,10 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
             axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
+            if np.count_nonzero(samples[it, 0] + 1) == 4:
+                axes[i, j].set_title("Quad")
+            if np.count_nonzero(samples[it, 0] + 1) == 2:
+                axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
 
             if i == int(nrow - 1):
@@ -671,7 +690,11 @@ def joint_inference(file_data, file_model, path_out, npts=1000):
         Outputs
             None
     """
-    model = torch.load(file_model, map_location='cpu')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    if device.type == "cpu":
+        model = torch.load(file_model, map_location='cpu')
+    else:
+        model = torch.load(file_model)
 
     # import data
     dataset = h5py.File(file_data, 'r')
@@ -679,7 +702,8 @@ def joint_inference(file_data, file_model, path_out, npts=1000):
     dt = dataset["time_delays"][:]
     pot = dataset["Fermat_potential"][:]
     dataset.close()
-    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2);
+    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    samples = samples[:1000]
     nsamp = samples.shape[0]
     true = float(np.unique(H0))
 
@@ -696,23 +720,21 @@ def joint_inference(file_data, file_model, path_out, npts=1000):
     post = post.reshape(nsamp, npts)
     post = normalization(prior_tile.reshape(nsamp, npts), post)
 
-    post[0] *= 1000
-    joint1 = np.prod(np.log(post[:10]), axis=0)
-    joint1 -= np.trapz(joint1, prior)
+    joint1 = np.sum(np.log(post[:10]), axis=0)
+    joint1 -= log_trick(joint1)
     joint2 = np.sum(np.log(post[:100]), axis=0)
-    joint2 -= np.trapz(joint2, prior)
-    post[0] *= 1e30
-    joint3 = np.prod(post[:1000], axis=0)
-    joint3 /= np.trapz(joint3, prior)
+    joint2 -= log_trick(joint2)
+    joint3 = np.sum(np.log(post[:1000]), axis=0)
+    joint3 -= log_trick(joint3)
     joints = np.concatenate((joint1[:, None], joint2[:, None], joint3[:, None]), axis=1)
 
     plt.figure()
-    #plt.plot(prior, joint1, '-b', label='10 lenses')
-    #plt.plot(prior, joint2, '--r', label='100 lenses')
-    plt.plot(prior, joint3, '-.g', label='1000 lenses')
-    min_post = np.min(joints)
-    max_post = np.max(joints)
-    #plt.vlines(true, min_post, max_post, colors='k', linestyles='dotted', label='{:.2f}'.format(true))
+    plt.plot(prior, np.exp(joint1), '-b', label='10 lenses')
+    plt.plot(prior, np.exp(joint2), '--r', label='100 lenses')
+    plt.plot(prior, np.exp(joint3), '-.g', label='1000 lenses')
+    min_post = np.min(np.exp(joints))
+    max_post = np.max(np.exp(joints))
+    plt.vlines(true, min_post, max_post, colors='k', linestyles='dotted', label="truth")
     plt.legend()
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'

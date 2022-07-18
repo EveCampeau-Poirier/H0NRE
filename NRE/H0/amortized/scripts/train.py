@@ -24,6 +24,7 @@ if __name__ == "__main__":
     parser.add_argument("--path_out", type=str, default="", help="path to save the outputs")
     parser.add_argument("--path_hyper", type=str, default="", help="path to the hyperparameter file")
     parser.add_argument("--data_file", type=str, default="dataset.hdf5", help="filename of dataset")
+    parser.add_argument("--weights_file", type=str, default=False, help="filename of weights")
     parser.add_argument("--sched", type=bool, default=False, help="True if a learning rate scheduler is needed")
     parser.add_argument("--anomaly", type=bool, default=False, help="True if detect_anomaly is needed")
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
@@ -46,6 +47,8 @@ if __name__ == "__main__":
         p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .5, args.nepochs
 
     nn = DeepSets()
+    if weights_file:
+        nn.load_state_dict(torch.load(weights_file))
     loss_fct = CrossEntropyLoss()
     opt = Adamax(nn.parameters(), lr=rate, weight_decay=L2)
 

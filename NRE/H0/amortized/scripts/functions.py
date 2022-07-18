@@ -284,8 +284,8 @@ def split_data(file, path_in):
     return train_set, valid_set
 
 
-def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=None, threshold=None,
-             grad_clip=None, anomaly_detection=False, batch_size=128, epochs=60, probe=70):
+def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=None, threshold,
+             grad_clip=None, anomaly_detection=False, batch_size=128, epochs=100, probe=70):
     """
     Manages the training
     Inputs
@@ -296,7 +296,8 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=N
         optimizer : (torch optimizer) optimizer
         loss_fn : (object) training objective
         acc_fn : (function) metric to evaluate accuracy
-        sched : If not None, learning rate scheduler to update
+        sched : (function?) If not None, learning rate scheduler to update
+        threshold : (int) Epoch at which the scheduler stops updating the learning rate
         grad_clip : (float) If not None, max norm for gradient clipping
         anomaly_detection : (bool) If True, the forward pass is done with autograd.detect_anomaly()
         batch_size : (int) batch size

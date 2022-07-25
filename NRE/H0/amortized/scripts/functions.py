@@ -60,6 +60,7 @@ def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     Inputs
         x : (tensor)[batch_size x 4 x 2] Time delays and Fermat potentials
         sig_dt : (float) noise standard deviation on time delays
+        sig_pot : (float) noise standard deviation on potentials
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
@@ -573,7 +574,14 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     # Global NRE posterior
     gb_prior = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     gb_pr_tile = np.tile(gb_prior, (nsamp, 1))
-    gb_ratios = r_estimator(model, data, torch.from_numpy(gb_pr_tile))
+    gb_ratios = np.zeros(npts * nsamp)
+
+    dataset_test = torch.utils.data.TensorDataset(data, torch.from_numpy(gb_pr_tile))
+    dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=128)
+    step = 0
+    for data_test, point in dataloader:
+        gb_ratios[step] = r_estimator(model, data_test, point)
+        step += 1
 
     gb_ratios = gb_ratios.reshape(nsamp, npts)
     gb_ratios = normalization(gb_pr_tile.reshape(nsamp, npts), gb_ratios)

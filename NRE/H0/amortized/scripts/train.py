@@ -47,8 +47,8 @@ if __name__ == "__main__":
         p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .5, 1000
 
     nn = DeepSets()
-    if weights_file:
-        nn.load_state_dict(torch.load(weights_file))
+    if args.weights_file:
+        nn.load_state_dict(torch.load(args.weights_file))
     loss_fct = CrossEntropyLoss()
     opt = Adamax(nn.parameters(), lr=rate, weight_decay=L2)
 
@@ -65,8 +65,8 @@ if __name__ == "__main__":
              optimizer=opt,
              loss_fn=loss_fct,
              acc_fn=acc_fct,
-             sched=scheduler,
              threshold=thresh,
+             sched=scheduler,
              grad_clip=max_norm,
              anomaly_detection=args.anomaly,
              batch_size=args.batch_size,

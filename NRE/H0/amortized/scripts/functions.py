@@ -285,7 +285,7 @@ def split_data(file, path_in):
     return train_set, valid_set
 
 
-def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, sched=None, threshold,
+def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, threshold, sched=None,
              grad_clip=None, anomaly_detection=False, batch_size=128, epochs=100, probe=70):
     """
     Manages the training

@@ -69,7 +69,7 @@ class PMA(nn.Module):
 
 class SetTransformer(nn.Module):
     def __init__(self, dim_input=2, num_outputs=1, dim_output=2,
-                 num_inds=32, dim_heads=32, num_heads=12, ln=False):
+                 num_inds=32, dim_heads=32, num_heads=7, ln=False):
         super(SetTransformer, self).__init__()
         dim_hidden = dim_heads * num_heads
         self.enc = nn.Sequential(

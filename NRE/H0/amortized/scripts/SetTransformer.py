@@ -69,7 +69,7 @@ class PMA(nn.Module):
 
 class SetTransformer(nn.Module):
     def __init__(self, dim_input=2, num_outputs=1, dim_output=2,
-                 num_inds=32, dim_heads=32, num_heads=7, ln=False):
+                 num_inds=32, dim_heads=64, num_heads=6, ln=False):
         super(SetTransformer, self).__init__()
         dim_hidden = dim_heads * num_heads
         self.enc = nn.Sequential(
@@ -89,24 +89,25 @@ class SetTransformer(nn.Module):
     def forward(self, x1, x2):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
+        #x1 shape = (batch size, 3, 2)
+
         # Doubles and quads separation
         count = torch.count_nonzero(x1[:, :, 0] + 1, dim=1)
-        if torch.any(count == 2):
-            ind2 = torch.where(count == 2)
+        if torch.any(count == 1):
+            ind2 = torch.where(count == 1)
             doubles = x1[ind2][:, :2, :]
             doubles = self.enc(doubles)
             doubles = self.pool(doubles)
-            doubles = self.pool(doubles)
             x = doubles.squeeze(1)
-        if torch.any(count == 4):
-            ind4 = torch.where(count == 4)
+        if torch.any(count == 3):
+            ind4 = torch.where(count == 3)
             quads = x1[ind4]
             quads = self.enc(quads)
             quads = self.pool(quads)
             x = quads.squeeze(1)
 
         # Doubles and quads recombination
-        if torch.any(count == 2) and torch.any(count == 4):
+        if torch.any(count == 1) and torch.any(count == 3):
             x = torch.zeros((x1.size(0), self.dim_hidden), device=device, dtype=doubles.dtype)
             x[ind2] = doubles.squeeze(1)
             x[ind4] = quads.squeeze(1)

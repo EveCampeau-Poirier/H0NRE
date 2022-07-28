@@ -44,7 +44,7 @@ if __name__ == "__main__":
         freq, factor, thresh = np.loadtxt(args.path_hyper + "/hyparams.txt", unpack=True)
         p_drop, L2, rate, max_norm = 0., 0., 1e-4, None
     else:
-        p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .5, args.nepochs
+        p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .75, 1000
 
     nn = DeepSets()
     if args.weights_file:

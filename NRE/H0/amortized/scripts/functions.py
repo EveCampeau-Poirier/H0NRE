@@ -64,18 +64,17 @@ def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
-    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)
-    mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
+    mask = torch.where(x[:, :, 0] == -1, 0, 1)
     noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
     noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
     noisy_data = x.clone()
-    noisy_data[:, :, 0] += noise_dt * mask_zero * mask_pad
-    noisy_data[:, :, 1] += noise_pot * mask_zero * mask_pad
+    noisy_data[:, :, 0] += noise_dt * mask
+    noisy_data[:, :, 1] += noise_pot * mask
 
     return noisy_data
 
 
-def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
+def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
     """
     Computes the analytical likelihood
     Inputs
@@ -87,7 +86,7 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
     """
     nsamp = dt.shape[0]
     npts = H0.shape[0]
-    mu = np.zeros((nsamp, npts, 4))
+    mu = np.zeros((nsamp, npts, 3))
     pad = -np.ones((2))
 
     for i in range(nsamp):
@@ -99,14 +98,15 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sigma=.4):
             Dd = cosmo_model.angular_diameter_distance(zd[i])
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
             sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, fermat])
-            if len(fermat) == 2:
+            if len(fermat) == 1:
                 sim = np.concatenate((sim, pad), axis=None)
             mu[i, j] = sim
 
     size = np.count_nonzero(dt + 1, axis=1)
-    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** size[:, None]
+    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:, None]
 
     return lkh
+
 
 def log_trick(logp):
     """
@@ -134,19 +134,22 @@ def r_estimator(model, x1, x2):
         lr : (array)[nexamp] likelihood ratio
     """
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    
+
     x1 = x1.to(device, non_blocking=True).float()
     x2 = x2.to(device, non_blocking=True).float()
-    
-    model = model.to(device, non_blocking=True)
+
+    # model = model.to(device, non_blocking=True)
     model.eval()
-    
+
     with torch.no_grad():
         output = model(x1, x2)
-        
-    prob = torch.sigmoid(output[:,1])
+
+    x1.detach()
+    x2.detach()
+
+    prob = torch.sigmoid(output[:, 1])
     s = prob.detach().cpu().numpy()
-    lr = s/(1-s)
+    lr = s / (1 - s)
     
     return lr
 
@@ -481,6 +484,7 @@ def plot_results(file, path_out):
     plt.figure()
     plt.plot(train_loss, 'b', label='Training')
     plt.plot(valid_loss, 'r', label='Validation')
+    plt.yscale("log")
     plt.xlabel("Epoch")
     plt.ylabel("Loss (Cross entropy)")
     plt.rcParams['axes.facecolor'] = 'white'
@@ -526,7 +530,7 @@ def plot_results(file, path_out):
     plt.savefig(path_out+'/valid_lr.png', bbox_inches='tight')
 
     
-def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1000):
+def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1000, batch_size=100):
     """
     Computes the NRE posterior, the analytical posterior and performs the coverage diagnostic
     Inputs
@@ -574,14 +578,15 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     # Global NRE posterior
     gb_prior = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     gb_pr_tile = np.tile(gb_prior, (nsamp, 1))
-    gb_ratios = np.zeros(npts * nsamp)
+    gb_ratios = np.zeros(nsamp * npts)
 
     dataset_test = torch.utils.data.TensorDataset(data, torch.from_numpy(gb_pr_tile))
-    dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=128)
+    dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     step = 0
     for data_test, point in dataloader:
-        gb_ratios[step] = r_estimator(model, data_test, point)
-        step += 1
+        probs = r_estimator(model, data_test, point)
+        gb_ratios[step: step + probs.shape[0]] = probs
+        step += probs.shape[0]
 
     gb_ratios = gb_ratios.reshape(nsamp, npts)
     gb_ratios = normalization(gb_pr_tile.reshape(nsamp, npts), gb_ratios)
@@ -594,7 +599,15 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
         true[i] = float(H0[i])
         max_prob = gb_prior[np.argmax(gb_ratios[i])]
         lc_prior[i] = torch.linspace(max_prob - 1., max_prob + 1., npts)
-    lc_ratios = r_estimator(model, data, lc_prior.reshape(npts * nsamp, 1))
+
+    lc_ratios = np.zeros(nsamp * npts)
+    dataset_loc = torch.utils.data.TensorDataset(data, lc_prior.reshape(nsamp * npts, 1))
+    dataloader = torch.utils.data.DataLoader(dataset_loc, batch_size=batch_size)
+    step = 0
+    for data_test, point in dataloader:
+        probs = r_estimator(model, data_test, point)
+        lc_ratios[step: step + probs.shape[0]] = probs
+        step += probs.shape[0]
 
     # predictions
     arg_pred = np.argmax(lc_ratios.reshape(nsamp, npts), axis=1)
@@ -608,24 +621,22 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            axes[i, j].plot(gb_prior, analytic[it], '--g', label="Analytic")
+            axes[i, j].plot(gb_prior, analytic[it], '--g', label='{:.2f}'.format(int(np.max(analytic[it]))))
             axes[i, j].plot(gb_prior, gb_ratios[it], '-b', label='{:.2f}'.format(pred[it]))
             min_post = np.minimum(np.min(gb_ratios[it]), np.min(analytic[it]))
             max_post = np.maximum(np.max(gb_ratios[it]), np.max(analytic[it]))
             axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            if np.count_nonzero(samples[it, 0] + 1) == 4:
+            if np.count_nonzero(samples[it, 0] + 1) == 3:
                 axes[i, j].set_title("Quad")
-            if np.count_nonzero(samples[it, 0] + 1) == 2:
+            if np.count_nonzero(samples[it, 0] + 1) == 1:
                 axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
-
             if i == int(nrow - 1):
                 axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
             if j == 0:
-                axes[i, j].set_ylabel("Likelihood ratio")
-
+                axes[i, j].set_ylabel(r"$p(H_0$ | $\Delta_t, \Delta_\phi)$")
             it += 1
 
     # saving
@@ -639,22 +650,22 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
 
     NRE_lc = post_file.create_group("NRE_local")
-    H0_lc = NRE_lc.create_dataset("H0", (nplot, npts), dtype='f')
-    post_lc = NRE_lc.create_dataset("posterior", (nplot, npts), dtype='f')
+    H0_lc = NRE_lc.create_dataset("H0", (nsamp, npts), dtype='f')
+    post_lc = NRE_lc.create_dataset("posterior", (nsamp, npts), dtype='f')
 
     NRE_gb = post_file.create_group("NRE_global")
-    H0_gb = NRE_gb.create_dataset("H0", (nsamp,), dtype='f')
-    post_gb = NRE_gb.create_dataset("posterior", (nplot, npts), dtype='f')
-    post_anl = NRE_gb.create_dataset("analytical", (nplot, npts), dtype='f')
+    H0_gb = NRE_gb.create_dataset("H0", (npts,), dtype='f')
+    post_gb = NRE_gb.create_dataset("posterior", (nsamp, npts), dtype='f')
+    post_anl = NRE_gb.create_dataset("analytical", (nsamp, npts), dtype='f')
 
-    truth_set = post_file.create_dataset("truth", (nplot,), dtype='f')
+    truth_set = post_file.create_dataset("truth", (nsamp,), dtype='f')
 
-    H0_lc[:, :] = lc_prior[:nplot]
-    post_lc[:, :] = lc_ratios.reshape(nsamp, npts)[:nplot]
+    H0_lc[:, :] = lc_prior
+    post_lc[:, :] = lc_ratios.reshape(nsamp, npts)
     H0_gb[:] = gb_prior
-    post_gb[:, :] = gb_ratios[:nplot]
-    post_anl[:, :] = analytic[:nplot]
-    truth_set[:] = true[:nplot]
+    post_gb[:, :] = gb_ratios
+    post_anl[:, :] = analytic
+    truth_set[:] = true
 
     post_file.close()
 
@@ -677,19 +688,20 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
         counts[i] = np.sum(np.where(2 * interval <= bins[i], 1, 0))
     counts /= nsamp
 
+    plt.style.use(['dark_background'])
     plt.figure()
-    plt.plot(bins, bins, '--k')
-    plt.plot(bins, counts, '-g')
+    plt.plot(bins, bins, '--', color='white')
+    plt.plot(bins, counts, '-', color='lime')
     plt.xlabel("Probability interval")
     plt.ylabel("Fraction of truths inside")
-    plt.text(0., .9, "Underconfident")
-    plt.text(.65, .05, "Overconfident")
-    plt.rcParams['axes.facecolor'] = 'white'
-    plt.rcParams['savefig.facecolor'] = 'white'
+    plt.text(0., .9, "Underconfident", fontsize='large')
+    plt.text(.65, .05, "Overconfident", fontsize='large')
+    # plt.rcParams['axes.facecolor'] = 'white'
+    # plt.rcParams['savefig.facecolor'] = 'white'
     plt.savefig(path_out + '/coverage.png', bbox_inches='tight')
 
 
-def joint_inference(file_data, file_model, path_out, npts=1000):
+def joint_inference(file_data, file_model, path_out, npts=1000, lower_bound=60., upper_bound=80.):
     """
         Performs the joint inference on a population of lenses
         Inputs
@@ -721,7 +733,7 @@ def joint_inference(file_data, file_model, path_out, npts=1000):
     data = torch.repeat_interleave(x, npts, dim=0)
 
     # Global NRE posterior
-    prior = np.linspace(65, 75, npts).reshape(npts, 1)
+    prior = np.linspace(lower_bound, upper_bound, npts).reshape(npts, 1)
     prior_tile = np.tile(prior, (nsamp, 1))
     prior = prior.flatten()
     post = r_estimator(model, data, torch.from_numpy(prior_tile))

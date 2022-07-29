@@ -3,13 +3,17 @@ import torch.nn as nn
 
 
 class DeepSets(nn.Module):
-    def __init__(self, nfeat=32, nheads=128, p_drop=0):
+    def __init__(self, nfeat=32, nheads=256):
         super(DeepSets, self).__init__()
 
         self.nfeat = nfeat
 
         self.encoder = nn.Sequential(
             nn.Linear(2, nheads),
+            nn.ELU(),
+            nn.Linear(nheads, nheads),
+            nn.ELU(),
+            nn.Linear(nheads, nheads),
             nn.ELU(),
             nn.Linear(nheads, nheads),
             nn.ELU(),
@@ -35,34 +39,31 @@ class DeepSets(nn.Module):
     def forward(self, x1, x2):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-        # shape x1 : batch, 4, 2
+        # shape x1 : batch, 3, 2
         # Doubles and quads separation
         count = torch.count_nonzero(x1[:, :, 0] + 1, dim=1)
-        ind2 = torch.where(count == 2)
-        ind4 = torch.where(count == 4)
-        doubles = x1[ind2][:, :2]
-        quads = x1[ind4]
-
-        # Reshape to apply the encoder
-        doubles = doubles.reshape(2 * doubles.size(0), 2)
-        quads = quads.reshape(4 * quads.size(0), 2)
-
-        # Encoding
-        doubles = self.encoder(doubles)
-        quads = self.encoder(quads)
-
-        # Reshape to retrieve the time delay sets
-        doubles = doubles.view(-1, 2, self.nfeat)
-        quads = quads.view(-1, 4, self.nfeat)
-
-        # Pooling over the time delays
-        doubles = torch.mean(doubles, dim=1)
-        quads = torch.mean(quads, dim=1)
+        # Doubles
+        if torch.any(count == 1):
+            ind2 = torch.where(count == 1)
+            doubles = x1[ind2][:, :2]
+            doubles = doubles.reshape(doubles.size(0), 2)
+            doubles = self.encoder(doubles)
+            doubles = doubles.view(-1, 1, self.nfeat)
+            doubles = torch.mean(doubles, dim=1)
+        # Quads
+        if torch.any(count == 3):
+            ind4 = torch.where(count == 3)
+            quads = x1[ind4]
+            quads = quads.reshape(3 * quads.size(0), 2)
+            quads = self.encoder(quads)
+            quads = quads.view(-1, 3, self.nfeat)
+            quads = torch.mean(quads, dim=1)
 
         # Doubles and quads recombination
-        x = torch.zeros((x1.size(0), self.nfeat), device=device, dtype=doubles.dtype)
-        x[ind2] = doubles
-        x[ind4] = quads
+        if torch.any(count == 1) and torch.any(count == 3):
+            x = torch.zeros((x1.size(0), self.nfeat), device=device, dtype=doubles.dtype)
+            x[ind2] = doubles
+            x[ind4] = quads
 
         # Decoder
         x = torch.cat((x, x2), dim=1)

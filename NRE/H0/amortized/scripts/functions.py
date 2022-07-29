@@ -252,11 +252,13 @@ def split_data(file, path_in):
     H0 = dataset["Hubble_cst"][:]
     dataset.close()
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    nsamp = samples.shape[0]
+    samples = samples[samples != 0]
+    samples = samples.reshape(nsamp, 3, 2)
     lower_bound = np.floor(np.min(H0))
     higher_bound = np.ceil(np.max(H0))
 
     # Splitting sets
-    nsamp = samples.shape[0]
     keys = np.arange(nsamp)
     train_keys = np.random.choice(keys, size=int(.8 * nsamp), replace=False)
     left_keys = np.setdiff1d(keys, train_keys)
@@ -557,6 +559,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     H0 = dataset["Hubble_cst"][test_keys]
     lower_bound = np.floor(np.min(H0))
     higher_bound = np.ceil(np.max(H0))
+
     # remove out of bounds data
     idx_up = np.where(H0 > 75.)[0]
     idx_down = np.where(H0 < 65.)[0]
@@ -567,9 +570,13 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     pot = dataset["Fermat_potential"][test_keys]
     z = dataset["redshifts"][test_keys]
     dataset.close()
+
+    # reshape data
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     samples = samples[:1000]
     nsamp = samples.shape[0]
+    samples = samples[samples != 0]
+    samples = samples.reshape(nsamp, 3, 2)
 
     # observations
     x = gaussian_noise(torch.from_numpy(samples))
@@ -726,6 +733,8 @@ def joint_inference(file_data, file_model, path_out, npts=1000, lower_bound=60.,
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     samples = samples[:1000]
     nsamp = samples.shape[0]
+    samples = samples[samples != 0]
+    samples = samples.reshape(nsamp, 3, 2)
     true = float(np.unique(H0))
 
     # observations

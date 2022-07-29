@@ -13,7 +13,7 @@ from torch.optim.lr_scheduler import StepLR
 from functions import acc_fct, train_fn, plot_results, inference
 
 # Model
-from classifier import DeepSets
+from networks import MLP, DeepSets, SetTransformer
 
 # --- Execution ------------------------------------------------------------
 if __name__ == "__main__":
@@ -24,12 +24,15 @@ if __name__ == "__main__":
     parser.add_argument("--path_out", type=str, default="", help="path to save the outputs")
     parser.add_argument("--path_hyper", type=str, default="", help="path to the hyperparameter file")
     parser.add_argument("--data_file", type=str, default="dataset.hdf5", help="filename of dataset")
+    parser.add_argument("--architecture", type=str, default="DeepSets", help="Network's architecture")
     parser.add_argument("--weights_file", type=str, default=False, help="filename of weights")
     parser.add_argument("--sched", type=bool, default=False, help="True if a learning rate scheduler is needed")
     parser.add_argument("--anomaly", type=bool, default=False, help="True if detect_anomaly is needed")
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
     parser.add_argument("--nepochs", type=int, default=100, help="number of training epochs")
     parser.add_argument("--probe", type=float, default=70, help="likelihood ratio probes")
+    parser.add_argument("--num_heads", type=int, default=4, help="Nbr of attention heads")
+    parser.add_argument("--dim_heads", type=int, default=32, help="Size of each attention head")
 
     args = parser.parse_args()
 
@@ -46,7 +49,12 @@ if __name__ == "__main__":
     else:
         p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .75, 1000
 
-    nn = DeepSets()
+    if args.architecture == "DeepSets" :
+        nn = DeepSets()
+    elif args.architecture == "SetTransformer" :
+        nn = SetTransformer(dim_heads=args.dim_heads, num_heads=args.num_heads)
+    elif args.architecture == "MLP":
+        nn = MLP()
     if args.weights_file:
         nn.load_state_dict(torch.load(args.weights_file))
     loss_fct = CrossEntropyLoss()

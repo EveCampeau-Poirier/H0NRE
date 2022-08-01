@@ -74,7 +74,22 @@ def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     return noisy_data
 
 
-def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
+def multivariate_gaussian(x, mu, sigma, size, axis):
+    """
+        Computes on multivariate gaussian with a diagonal covariance matrix
+        Inputs
+            x : (array) variable
+            mu : (array) mean
+            sigma : (float) standard deviation
+            size : (int) number of dimensions
+            axis : (int) axis on which to combine the dimensions
+        Outputs
+            gauss : (array) Gaussian distribution
+        """
+    gauss = np.exp(-np.sum((x - mu) ** 2, axis=axis) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size/2)
+    return gauss
+
+def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot=.003, npts_int=10):
     """
     Computes the analytical likelihood
     Inputs
@@ -82,25 +97,51 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
         mu : (array)[test set size x 4] True time delays
         sigma : (float) noise standard deviation on time delays
     Outputs
-        lkh_doub : (tensor)[nsamp x npts] Likelihood
+        lkh : (tensor)[nsamp x npts] Likelihood
     """
-    nsamp = dt.shape[0]
-    npts = H0.shape[0]
+    nsamp = time_delays.shape[0]
+    npts_post = H0.shape[0]
     mu = np.zeros((nsamp, npts, 3))
     pad = -np.ones((2))
 
     for i in range(nsamp):
-        for j in range(npts):
-            fermat = pot[i]
-            fermat = fermat[fermat != -1]
-            cosmo_model = FlatLambdaCDM(H0=H0[j], Om0=.3)
-            Ds = cosmo_model.angular_diameter_distance(zs[i])
-            Dd = cosmo_model.angular_diameter_distance(zd[i])
-            Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-            sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, fermat])
-            if len(fermat) == 1:
-                sim = np.concatenate((sim, pad), axis=None)
-            mu[i, j] = sim
+        dt_measure = time_delays[i]
+        dt_measure = dt_measure[dt_measure != -1]
+        dt_ranges = np.linspace(dt_measure - 3 * sig_dt, dt_measure + 3 * sig_dt, npts_int)
+        if dt_ranges.shape[0] == 3:
+            dt_grid = np.asarray(np.meshgrid(dt_ranges[0], dt_ranges[1], dt_ranges[2]), indexing='ij')
+        else:
+            dt_grid = dt_ranges
+        dt_grid = np.moveaxis(dt_grid, 0, -1)
+        dt_grid = dt_grid.reshape(-1, dt_grid[-1])
+
+        p_dt = multivariate_gaussian(dt_grid, dt_measure[None, :], sig_dt, len(dt_measure), 1)
+
+        dphi_measure = fermat_pot[i]
+        dphi_measure = dphi_measure[dphi_measure != -1]
+        dphi_ranges = np.linspace(dphi_measure - 3 * sig_pot, dphi_measure + 3 * sig_pot, npts_int)
+        if dphi_ranges.shape[0] == 3:
+            dphi_grid = np.asarray(np.meshgrid(dphi_ranges[0], dphi_ranges[1], dphi_ranges[2]), indexing='ij')
+        else:
+            dphi_grid = dphi_ranges
+        dphi_grid = np.moveaxis(dphi_grid, 0, -1)
+        dphi_grid = dphi_grid.reshape(-1, dphi_grid[-1])
+
+        p_dphi = multivariate_gaussian(dphi_grid, dphi_measure[None, :], sig_pot, len(dphi_measure), 1)
+
+
+        for j in range(npts_post):
+            for k in range(dphi_grid.shape[0]):
+                cosmo_model = FlatLambdaCDM(H0=H0[j], Om0=.3)
+                Ds = cosmo_model.angular_diameter_distance(zs[i])
+                Dd = cosmo_model.angular_diameter_distance(zd[i])
+                Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
+                sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, dphi_grid[k]])
+                if len(fermat) == 1:
+                    sim = np.concatenate((sim, pad), axis=None)
+                size = np.count_nonzero(dt + 1, axis=1)
+                lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:, None]
+                mu[i, j] = sim
 
     size = np.count_nonzero(dt + 1, axis=1)
     lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:, None]

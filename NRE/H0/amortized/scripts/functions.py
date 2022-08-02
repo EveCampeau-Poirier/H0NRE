@@ -74,7 +74,7 @@ def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     return noisy_data
 
 
-def multivariate_gaussian(x, mu, sigma, size, axis):
+def multivariate_gaussian(x, mu, sigma, size):
     """
         Computes on multivariate gaussian with a diagonal covariance matrix
         Inputs
@@ -86,67 +86,84 @@ def multivariate_gaussian(x, mu, sigma, size, axis):
         Outputs
             gauss : (array) Gaussian distribution
         """
-    gauss = np.exp(-np.sum((x - mu) ** 2, axis=axis) / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size/2)
+    gauss = np.exp(-(x - mu) ** 2 / 2 / sigma ** 2) / (2 * np.pi * sigma ** 2) ** (size/2)
     return gauss
+
+
+def integration_variable(measure, sigma, npts):
+    """
+        Computes on multivariate gaussian with a diagonal covariance matrix
+        Inputs
+            measure : (array) variable
+            sigma : (float) standard deviation
+            npts : (int) number of points
+        Outputs
+            grid : (array) Grid of points to integrate
+    """
+    measure = measure[measure != -1]
+    size = len(measure)
+    ranges = np.linspace(measure - 3 * sigma, measure + 3 * sigma, npts)
+    if size == 3:
+        grid = np.asarray(np.meshgrid(ranges[0], ranges[1], ranges[2], indexing='ij'))
+    else:
+        grid = ranges
+    grid = np.moveaxis(grid, 0, -1)
+    grid = grid.reshape(-1, size)
+
+    return grid
+
 
 def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot=.003, npts_int=10):
     """
-    Computes the analytical likelihood
+    Computes the analytical posterior
     Inputs
-        x : (array)[test set size x 4] Noisy time delays
-        mu : (array)[test set size x 4] True time delays
-        sigma : (float) noise standard deviation on time delays
+        time_delays : (array) [nsamp x 3] Measured time delays
+        fermat_pot : (array) [nsamp x 3] Modeled Fermat potentials
+        H0 : (array) [npts_post] Grid of H0 values
+        zs : (array) Source's redshift
+        zd : (array) Deflector's redshift
+        sig_dt : (float) Time delays standard deviation
+        sig_pot : (float) Fermat potentils standard deviation
+        npts_int : (int) Number of points to integrate
     Outputs
-        lkh : (tensor)[nsamp x npts] Likelihood
+        post : (array)[nsamp x npts] posterior
     """
     nsamp = time_delays.shape[0]
     npts_post = H0.shape[0]
-    mu = np.zeros((nsamp, npts, 3))
-    pad = -np.ones((2))
+    post = np.zeros((nsamp, npts_post))
+
+    time_delays = time_delays[time_delays != 0.]
+    fermat_pot = fermat_pot[fermat_pot != 0.]
 
     for i in range(nsamp):
-        dt_measure = time_delays[i]
-        dt_measure = dt_measure[dt_measure != -1]
-        dt_ranges = np.linspace(dt_measure - 3 * sig_dt, dt_measure + 3 * sig_dt, npts_int)
-        if dt_ranges.shape[0] == 3:
-            dt_grid = np.asarray(np.meshgrid(dt_ranges[0], dt_ranges[1], dt_ranges[2]), indexing='ij')
+        size = np.count_nonzero(time_delays[i] + 1.)
+        if size == 1:
+            dt = np.array([time_delays[i]])
+            pot = np.array([fermat_pot[i]])
         else:
-            dt_grid = dt_ranges
-        dt_grid = np.moveaxis(dt_grid, 0, -1)
-        dt_grid = dt_grid.reshape(-1, dt_grid[-1])
-
-        p_dt = multivariate_gaussian(dt_grid, dt_measure[None, :], sig_dt, len(dt_measure), 1)
-
-        dphi_measure = fermat_pot[i]
-        dphi_measure = dphi_measure[dphi_measure != -1]
-        dphi_ranges = np.linspace(dphi_measure - 3 * sig_pot, dphi_measure + 3 * sig_pot, npts_int)
-        if dphi_ranges.shape[0] == 3:
-            dphi_grid = np.asarray(np.meshgrid(dphi_ranges[0], dphi_ranges[1], dphi_ranges[2]), indexing='ij')
-        else:
-            dphi_grid = dphi_ranges
-        dphi_grid = np.moveaxis(dphi_grid, 0, -1)
-        dphi_grid = dphi_grid.reshape(-1, dphi_grid[-1])
-
-        p_dphi = multivariate_gaussian(dphi_grid, dphi_measure[None, :], sig_pot, len(dphi_measure), 1)
-
+            dt = time_delays[i]
+            pot = fermat_pot[i]
+        grid_dt = integration_variable(dt, sig_dt, npts_int) # npts_int**size, size
+        prob_dt = multivariate_gaussian(grid_dt, dt[None, :], sig_dt, size) # npts_int**size, size
+        grid_dphi = integration_variable(pot, sig_pot, npts_int) # npts_int**size, size
+        prob_dphi = multivariate_gaussian(grid_dphi, pot[None, :], sig_pot, size) # npts_int**size, size
 
         for j in range(npts_post):
-            for k in range(dphi_grid.shape[0]):
+            dt_fct = np.zeros((npts_int ** size, size)) # npts_int**size, size
+            for k in range(grid_dphi.shape[0]):
                 cosmo_model = FlatLambdaCDM(H0=H0[j], Om0=.3)
                 Ds = cosmo_model.angular_diameter_distance(zs[i])
                 Dd = cosmo_model.angular_diameter_distance(zd[i])
                 Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-                sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, dphi_grid[k]])
-                if len(fermat) == 1:
-                    sim = np.concatenate((sim, pad), axis=None)
-                size = np.count_nonzero(dt + 1, axis=1)
-                lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:, None]
-                mu[i, j] = sim
+                print(grid_dphi.shape)
+                print(H0.shape)
+                dt_fct[j, k] = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, grid_dphi[k]])
 
-    size = np.count_nonzero(dt + 1, axis=1)
-    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:, None]
+            lkh = multivariate_gaussian(grid_dt[:, None, :], dt_fct[None, :, :], sig_dt, size) # npts_int**size, npts_int**size, size
+            integrant = prob_dt[:, None, :] * lkh * prob_dphi[None, :, :]
+            post[i, j] = np.prod(np.trapz(np.trapz(integrant, axis=1), axis=0))
 
-    return lkh
+    return post
 
 
 def log_trick(logp):
@@ -662,7 +679,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     pred = lc_prior[np.arange(nsamp), arg_pred].detach().cpu().numpy()
 
     # analytical posterior
-    analytic = analytical_likelihood(x[:, :, 0].numpy(), x[:, :, 1].numpy(), gb_prior, z[:, 1], z[:, 0])
+    analytic = analytical_posterior(x[:, :, 0].numpy(), x[:, :, 1].numpy(), gb_prior, z[:, 1], z[:, 0])
     analytic = normalization(gb_prior, analytic)
 
     it = 0

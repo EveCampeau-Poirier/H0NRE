@@ -100,15 +100,16 @@ def integration_variable(measure, sigma, npts):
         Outputs
             grid : (array) Grid of points to integrate
     """
-    measure = measure[measure != -1]
     size = len(measure)
     ranges = np.linspace(measure - 3 * sigma, measure + 3 * sigma, npts)
     if size == 3:
-        grid = np.asarray(np.meshgrid(ranges[0], ranges[1], ranges[2], indexing='ij'))
+        grid = np.asarray(np.meshgrid(ranges[:, 0], ranges[:, 1], ranges[:, 2], indexing='ij'))
     else:
         grid = ranges
+
     grid = np.moveaxis(grid, 0, -1)
     grid = grid.reshape(-1, size)
+    print(grid.shape)
 
     return grid
 
@@ -131,22 +132,25 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
     nsamp = time_delays.shape[0]
     npts_post = H0.shape[0]
     post = np.zeros((nsamp, npts_post))
-
+    ############################################
     time_delays = time_delays[time_delays != 0.]
+    time_delays = time_delays.reshape(nsamp, 3)
     fermat_pot = fermat_pot[fermat_pot != 0.]
-
+    fermat_pot = fermat_pot.reshape(nsamp, 3)
+    ########################################
     for i in range(nsamp):
         size = np.count_nonzero(time_delays[i] + 1.)
-        if size == 1:
-            dt = np.array([time_delays[i]])
-            pot = np.array([fermat_pot[i]])
-        else:
-            dt = time_delays[i]
-            pot = fermat_pot[i]
+        dt = time_delays[i][time_delays[i] != -1].reshape(size)
+        pot = fermat_pot[i][fermat_pot[i] != -1].reshape(size)
         grid_dt = integration_variable(dt, sig_dt, npts_int) # npts_int**size, size
         prob_dt = multivariate_gaussian(grid_dt, dt[None, :], sig_dt, size) # npts_int**size, size
         grid_dphi = integration_variable(pot, sig_pot, npts_int) # npts_int**size, size
         prob_dphi = multivariate_gaussian(grid_dphi, pot[None, :], sig_pot, size) # npts_int**size, size
+
+        plt.figure()
+        plt.plot(prob_dphi.prod(axis=1))
+        plt.figure()
+        plt.plot(prob_dt.prod(axis=1))
 
         for j in range(npts_post):
             dt_fct = np.zeros((npts_int ** size, size)) # npts_int**size, size
@@ -155,9 +159,7 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
                 Ds = cosmo_model.angular_diameter_distance(zs[i])
                 Dd = cosmo_model.angular_diameter_distance(zd[i])
                 Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-                print(grid_dphi.shape)
-                print(H0.shape)
-                dt_fct[j, k] = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, grid_dphi[k]])
+                dt_fct[k] = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, grid_dphi[k]])
 
             lkh = multivariate_gaussian(grid_dt[:, None, :], dt_fct[None, :, :], sig_dt, size) # npts_int**size, npts_int**size, size
             integrant = prob_dt[:, None, :] * lkh * prob_dphi[None, :, :]

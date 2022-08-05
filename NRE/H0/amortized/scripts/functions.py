@@ -210,28 +210,6 @@ def find_index(tensor, value):
     return ind
 
 
-def index_probe(theta, labels, probe, dependence=True):
-    """
-    Find index of the tensor element closest to the probe value in a given class
-    Inputs
-        theta : (tensor) parameter to probe
-        labels : (tensor) Labels associated with theta
-        probe : (float) Monitored parameter value
-        dependence : (bool) Class to probe
-    Outputs
-        idx : (int) index
-    """
-    if dependence:
-        ids = torch.nonzero(labels)
-    else:
-        ids = torch.nonzero(labels-1)
-    class_val = theta[ids]
-    id_class = find_index(class_val, probe)
-    idx = ids[id_class]
-
-    return idx
-
-
 def normalization(x, y):
     """
         Normalizes the analytical posterior
@@ -321,18 +299,18 @@ def split_data(file, path_in):
         test_ids[:] = test_keys
 
     # Making labels + torch format
-    x1_train, x2_train, y_train = make_classes(x1_train, x2_train, lower_bound, higher_bound)
-    x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid, lower_bound, higher_bound)
+    #x1_train, x2_train, y_train = make_classes(x1_train, x2_train, lower_bound, higher_bound)
+    #x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid, lower_bound, higher_bound)
 
     # Outputs
-    train_set = [x1_train, x2_train, y_train]
-    valid_set = [x1_valid, x2_valid, y_valid]
+    train_set = [torch.from_numpy(x1_train), torch.from_numpy(x2_train)]
+    valid_set = [torch.from_numpy(x1_valid), torch.from_numpy(x2_valid)]
 
     return train_set, valid_set
 
 
 def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, threshold, sched=None,
-             grad_clip=None, anomaly_detection=False, batch_size=128, epochs=100, probe=70):
+             grad_clip=None, anomaly_detection=False, batch_size=256, epochs=100):
     """
     Manages the training
     Inputs
@@ -349,7 +327,6 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
         anomaly_detection : (bool) If True, the forward pass is done with autograd.detect_anomaly()
         batch_size : (int) batch size
         epochs : (int) number of epochs
-        nprobes : (int) number of likelihood ratio probes
     Outputs
         None
     """
@@ -362,20 +339,11 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
     
     # Datasets
     train_set, valid_set = split_data(file, path_in)
-    x1_train, x2_train, y_train = train_set
-    x1_val, x2_val, y_val = valid_set
+    x1_train, x2_train = train_set
+    x1_val, x2_val = valid_set
     
-    dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train, y_train)
-    dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val, y_val)
-
-    # probe indices
-    idx_dep_train = index_probe(x2_train, y_train, probe)
-    idx_ind_train = index_probe(x2_train, y_train, probe, dependence=False)
-    idx_train = [int(idx_dep_train), int(idx_ind_train)]
-    
-    idx_dep_val = index_probe(x2_val, y_val, probe)
-    idx_ind_val = index_probe(x2_val, y_val, probe, dependence=False)
-    idx_val = [int(idx_dep_val), int(idx_ind_val)]
+    dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train)
+    dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val)
     
     # File to save logs
     if os.path.isfile(path_out+'/logs.hdf5'):
@@ -385,12 +353,10 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
     trng = save_file.create_group("training")
     train_loss = trng.create_dataset("loss", (epochs, 1), dtype='f')
     train_acc = trng.create_dataset("accuracy", (epochs, 1), dtype='f')
-    train_lr = trng.create_dataset("likelihood_ratio", (epochs, 2), dtype='f')
     
     vldt = save_file.create_group("validation")
     valid_loss = vldt.create_dataset("loss", (epochs, 1), dtype='f')
     valid_acc = vldt.create_dataset("accuracy", (epochs, 1), dtype='f')
-    valid_lr = vldt.create_dataset("likelihood_ratio", (epochs, 2), dtype='f')
     
     # starting timer
     start = time.time()
@@ -408,11 +374,9 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
             if phase == 'train':
                 model.train(True)  # training
                 dataloader = torch.utils.data.DataLoader(dataset_train, batch_size=batch_size)
-                x1_probe, x2_probe = x1_train[idx_train], x2_train[idx_train]
             else:
                 model.train(False)  # evaluation
                 dataloader = torch.utils.data.DataLoader(dataset_valid, batch_size=batch_size)
-                x1_probe, x2_probe = x1_val[idx_val], x2_val[idx_val]
                 
             # Initialization of cumulative loss on batches
             running_loss = 0.0
@@ -422,11 +386,16 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
             step = 0   # step initialization (batch number)
             
             # loop on batches
-            for x1, x2, y in dataloader:
+            for x1, x2 in dataloader:
                 x1 = gaussian_noise(x1)
                 x1 = x1.to(device, non_blocking=True).float()
+                x1a = x1[:int(dataloader.batch_size/2)]
+                x1b = x1[int(dataloader.batch_size/2):]
                 x2 = x2.to(device, non_blocking=True).float()
-                y = y.to(device, non_blocking=True).long()
+                x2a = x2[:int(dataloader.batch_size / 2)]
+                x2b = x2[int(dataloader.batch_size / 2):]
+                y_dep = torch.ones((int(dataloader.batch_size/2), 1)).to(device, non_blocking=True).long()
+                y_ind = torch.zeros((int(dataloader.batch_size/2), 1)).to(device, non_blocking=True).long()
                 
                 # training phase
                 if phase == 'train':
@@ -436,11 +405,21 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                     
                     if anomaly_detection:
                         with autograd.detect_anomaly():
-                            y_hat = model(x1, x2)
-                            loss = loss_fn(y_hat, y)
+                            y_hat_a_dep = model(x1a, x2a)
+                            y_hat_a_ind = model(x1a, x2b)
+                            loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
+                            y_hat_b_dep = model(x1b, x2b)
+                            y_hat_b_ind = model(x1b, x2a)
+                            loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
+                            loss = loss_a + loss_b
                     else:
-                        y_hat = model(x1, x2)
-                        loss = loss_fn(y_hat, y)
+                        y_hat_a_dep = model(x1a, x2a)
+                        y_hat_a_ind = model(x1a, x2b)
+                        loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
+                        y_hat_b_dep = model(x1b, x2b)
+                        y_hat_b_ind = model(x1b, x2a)
+                        loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
+                        loss = loss_a + loss_b
                     
                     # Backward Pass
                     loss.backward()
@@ -453,11 +432,20 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                 # validation phase
                 else:
                     with torch.no_grad():
-                        y_hat = model(x1, x2)
-                        loss = loss_fn(y_hat, y)
+                        y_hat_a_dep = model(x1a, x2a)
+                        y_hat_a_ind = model(x1a, x2b)
+                        loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
+                        y_hat_b_dep = model(x1b, x2b)
+                        y_hat_b_ind = model(x1b, x2a)
+                        loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
+                        loss = loss_a + loss_b
                 
                 # accuracy evaluation
-                acc = acc_fn(y_hat, y)
+                acc_a_dep = acc_fn(y_hat_a_dep, y_dep)
+                acc_a_ind = acc_fn(y_hat_a_ind, y_ind)
+                acc_b_dep = acc_fn(y_hat_b_dep, y_dep)
+                acc_b_ind = acc_fn(y_hat_b_ind, y_ind)
+                acc = torch.cat((acc_a_dep, acc_a_ind, acc_b_dep, acc_b_ind))
                 
                 # update cumulative values
                 running_acc += acc*dataloader.batch_size
@@ -472,7 +460,6 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
             # mean of loss and accuracy on epoch
             epoch_loss = running_loss / len(dataloader.dataset)
             epoch_acc = running_acc / len(dataloader.dataset)
-            epoch_lr = r_estimator(model, x1_probe, x2_probe)
 
             # print means
             print(f'{phase} Loss: {float(epoch_loss):.4e} // Acc: {float(epoch_acc):.4e}')
@@ -481,13 +468,11 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
             if phase == 'train':
                 train_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
                 train_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
-                train_lr[epoch, :] = epoch_lr
                 if sched is not None and epoch <= threshold:
                     sched.step()
             else:
                 valid_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
                 valid_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
-                valid_lr[epoch, :] = epoch_lr
 
         # Keeping track of the model
         if epoch % int(epochs/10) == 0:
@@ -519,8 +504,6 @@ def plot_results(file, path_out):
     valid_loss = data["validation/loss"][:]
     train_acc = data["training/accuracy"][:]
     valid_acc = data["validation/accuracy"][:]
-    train_lr = data["training/likelihood_ratio"][:]
-    valid_lr = data["validation/likelihood_ratio"][:]
     data.close()
     
     # loss
@@ -545,32 +528,6 @@ def plot_results(file, path_out):
     plt.rcParams['savefig.facecolor'] = 'white'
     plt.legend()
     plt.savefig(path_out+'/acc.png', bbox_inches='tight')
-    
-    # Likelihood ratio
-    color = ["green", "darkorange", "lime", "darkviolet", "cyan",
-             "deeppink", "darkblue", "gold", "maroon"] # "red","blue",
-    labels = ["dependent", "independent"]
-    plt.figure()
-    for i in range(train_lr.shape[1]):
-        plt.plot(train_lr[:, i], color=color[i], label=labels[i])
-    plt.xlabel("Epoch")
-    plt.ylabel("Likelihood ratio estimation")
-    plt.rcParams['axes.facecolor'] = 'white'
-    plt.rcParams['savefig.facecolor'] = 'white'
-    plt.title(r'H$_0$ = 70 km s$^{-1}$ Mpc$^{-1}$')
-    plt.legend()
-    plt.savefig(path_out+'/train_lr.png', bbox_inches='tight')
-
-    plt.figure()
-    for i in range(valid_lr.shape[1]):
-        plt.plot(valid_lr[:, i], color=color[i], label=labels[i])
-    plt.xlabel("Epoch")
-    plt.ylabel("Likelihood ratio estimation")
-    plt.rcParams['axes.facecolor'] = 'white'
-    plt.rcParams['savefig.facecolor'] = 'white'
-    plt.title(r'H$_0$ = 70 km s$^{-1}$ Mpc$^{-1}$')
-    plt.legend()
-    plt.savefig(path_out+'/valid_lr.png', bbox_inches='tight')
 
     
 def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1000, batch_size=100):

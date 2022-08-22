@@ -100,32 +100,7 @@ class MLP(nn.Module):
         )
 
     def forward(self, x1, x2):
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-        # shape x1 : batch, 3, 2
-        # Doubles and quads separation
-        count = torch.count_nonzero(x1[:, :, 0] + 1, dim=1)
-        # Doubles
-        if torch.any(count == 1):
-            ind2 = torch.where(count == 1)
-            doubles = x1[ind2][:, :-2]
-            doubles = doubles.reshape(doubles.size(0), 2)
-            x = doubles
-        # Quads
-        if torch.any(count == 3):
-            ind4 = torch.where(count == 3)
-            quads = x1[ind4]
-            quads = quads.reshape(3 * quads.size(0), 2)
-            x = quads
-
-        # Doubles and quads recombination
-        if torch.any(count == 1) and torch.any(count == 3):
-            x = torch.zeros((x1.size(0), self.nfeat), device=device, dtype=doubles.dtype)
-            x[ind2] = doubles
-            x[ind4] = quads
-
-
-        x = torch.cat((x, x2), dim=1)
+        x = torch.cat((x1, x2), dim=1)
         x = self.layers(x)
 
         return x

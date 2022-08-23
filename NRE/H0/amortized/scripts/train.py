@@ -10,7 +10,7 @@ from torch.optim import Adamax
 from torch.optim.lr_scheduler import StepLR
 
 # Functions
-from functions_inprogress import acc_fct, train_fn, plot_results, inference
+from functions_inprogress import acc_fct, train_fn, learning_curves, inference
 
 # Model
 from networks import MLP, DeepSets, SetTransformer
@@ -30,7 +30,6 @@ if __name__ == "__main__":
     parser.add_argument("--anomaly", type=bool, default=False, help="True if detect_anomaly is needed")
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
     parser.add_argument("--nepochs", type=int, default=100, help="number of training epochs")
-    parser.add_argument("--probe", type=float, default=70, help="likelihood ratio probes")
     parser.add_argument("--num_heads", type=int, default=4, help="Nbr of attention heads")
     parser.add_argument("--dim_heads", type=int, default=32, help="Size of each attention head")
 
@@ -49,9 +48,9 @@ if __name__ == "__main__":
     else:
         p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .75, 1000
 
-    if args.architecture == "DeepSets" :
+    if args.architecture == "DeepSets":
         nn = DeepSets()
-    elif args.architecture == "SetTransformer" :
+    elif args.architecture == "SetTransformer":
         nn = SetTransformer(dim_heads=args.dim_heads, num_heads=args.num_heads)
     elif args.architecture == "MLP":
         nn = MLP()
@@ -78,15 +77,14 @@ if __name__ == "__main__":
              grad_clip=max_norm,
              anomaly_detection=args.anomaly,
              batch_size=args.batch_size,
-             epochs=args.nepochs,
-             probe=args.probe)
+             epochs=args.nepochs)
 
     # --- Results ----------------------------------------------------------
 
     # **Save model**
     torch.save(nn, args.path_out + "/models/" + "trained_model.pt")
 
-    plot_results(os.path.join(args.path_out, "logs.hdf5"), os.path.join(args.path_out, "plots"))
+    learning_curves(os.path.join(args.path_out, "logs.hdf5"), os.path.join(args.path_out, "plots"))
 
     inference(os.path.join(args.path_in, "keys.hdf5"), os.path.join(args.path_in, args.data_file),
               args.path_out + "/models/" + "trained_model.pt", os.path.join(args.path_out, "plots"))

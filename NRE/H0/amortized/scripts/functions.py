@@ -49,12 +49,11 @@ def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
-    mask = torch.where(x[:, :, 0] == -1, 0, 1)
-    noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
-    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
+    noise_dt = sig_dt * torch.randn(x.size(0))
+    noise_pot = sig_pot * torch.randn(x.size(0))
     noisy_data = x.clone()
-    noisy_data[:, :, 0] += noise_dt * mask
-    noisy_data[:, :, 1] += noise_pot * mask
+    noisy_data[:, 0] += noise_dt
+    noisy_data[:, 1] += noise_pot
 
     return noisy_data
 
@@ -260,28 +259,6 @@ def split_data(file, path_in):
 
     return train_set, valid_set
 
-def compute_loss(x1a, x1b, x2a, x2b, model, loss_fn):
-    """
-    Inputs
-        x1a : (tensor) [batch_size / 2 x 2] Data from group a
-        x1b : (tensor) [batch_size / 2 x 2] Data from group b
-        x2a : (tensor) [batch_size / 2 x 1] H0 from group a
-        x2b : (tensor) [batch_size / 2 x 1] H0 from group b
-        model : (module object) neural network
-        loss_fn : (function) loss function
-    Outputs
-        loss : (float) total loss
-    """
-    y_hat_a_dep = model(x1a, x2a)
-    y_hat_a_ind = model(x1a, x2b)
-    loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-    y_hat_b_dep = model(x1b, x2b)
-    y_hat_b_ind = model(x1b, x2a)
-    loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
-    loss = loss_a + loss_b
-
-    return loss
-
 
 def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, threshold, sched=None,
              grad_clip=None, anomaly_detection=False, batch_size=256, epochs=100):
@@ -387,9 +364,21 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
 
                     if anomaly_detection:
                         with autograd.detect_anomaly():
-                            loss = compute_loss(x1a, x1b, x2a, x2b, model, loss_fn)
+                            y_hat_a_dep = model(x1a, x2a)
+                            y_hat_a_ind = model(x1a, x2b)
+                            loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
+                            y_hat_b_dep = model(x1b, x2b)
+                            y_hat_b_ind = model(x1b, x2a)
+                            loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
+                            loss = loss_a + loss_b
                     else:
-                        loss = compute_loss(x1a, x1b, x2a, x2b, model, loss_fn)
+                        y_hat_a_dep = model(x1a, x2a)
+                        y_hat_a_ind = model(x1a, x2b)
+                        loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
+                        y_hat_b_dep = model(x1b, x2b)
+                        y_hat_b_ind = model(x1b, x2a)
+                        loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
+                        loss = loss_a + loss_b
 
                     # Backward Pass
                     loss.backward()
@@ -402,7 +391,13 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                 # validation phase
                 else:
                     with torch.no_grad():
-                        loss = compute_loss(x1a, x1b, x2a, x2b, model, loss_fn)
+                        y_hat_a_dep = model(x1a, x2a)
+                        y_hat_a_ind = model(x1a, x2b)
+                        loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
+                        y_hat_b_dep = model(x1b, x2b)
+                        y_hat_b_ind = model(x1b, x2a)
+                        loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
+                        loss = loss_a + loss_b
 
                 # accuracy evaluation
                 acc_a_dep = acc_fn(y_hat_a_dep, y_dep)

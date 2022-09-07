@@ -181,6 +181,7 @@ def make_classes(x1, x2, lower_bound, upper_bound):
 
     return x1, x2, y
 
+
 def get_individual_images(x1, x2, nsamp):
     """
     Undo sets to output individual elements without zero elements and pads
@@ -226,9 +227,11 @@ def split_data(file, path_in):
     nsamp = H0.shape[0]
     keys = np.arange(nsamp)
     train_keys = np.random.choice(keys, size=int(.8 * nsamp), replace=False)
-    left_keys = np.setdiff1d(keys, train_keys)
-    valid_keys = np.random.choice(left_keys, size=int(.1 * nsamp), replace=False)
-    test_keys = np.setdiff1d(left_keys, valid_keys)
+    keys = np.setdiff1d(keys, train_keys)
+    valid_keys = np.random.choice(keys, size=int(.1 * nsamp), replace=False)
+    keys = np.setdiff1d(keys, valid_keys)
+    test_keys = np.random.choice(keys, size=1000, replace=False)
+    calib_keys = np.setdiff1d(keys, test_keys)
 
     x1_train, x2_train = samples[train_keys], H0[train_keys]
     x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
@@ -243,9 +246,11 @@ def split_data(file, path_in):
         train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
         valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
         test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
+        calib_ids = keys_file.create_dataset("calibration", test_keys.shape, dtype='i')
         train_ids[:] = train_keys
         valid_ids[:] = valid_keys
         test_ids[:] = test_keys
+        calib_ids[:] = calib_keys
 
     # Making labels + torch format
     # lower_bound = np.floor(np.min(H0))

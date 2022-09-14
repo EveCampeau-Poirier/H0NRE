@@ -49,11 +49,12 @@ def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
-    noise_dt = sig_dt * torch.randn(x.size(0))
-    noise_pot = sig_pot * torch.randn(x.size(0))
+    mask = torch.where(x[:, :, 0] == -1, 0, 1)
+    noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
+    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
     noisy_data = x.clone()
-    noisy_data[:, 0] += noise_dt
-    noisy_data[:, 1] += noise_pot
+    noisy_data[:, :, 0] += noise_dt * mask
+    noisy_data[:, :, 1] += noise_pot * mask
 
     return noisy_data
 
@@ -154,7 +155,7 @@ def normalization(x, y):
     return y
 
 
-def make_classes(x1, x2, lower_bound, upper_bound):
+def make_classes(x1, x2, lower_bound, higher_bound):
     """
     Creates labels, shuffles data
     Inputs
@@ -168,10 +169,10 @@ def make_classes(x1, x2, lower_bound, upper_bound):
     nsamp = x1.shape[0]
     nclass = int(nsamp / 2)
     if nsamp % 2 == 0:
-        x2[nclass:] = np.random.uniform(lower_bound, upper_bound, size=(nclass, 1))
+        x2[nclass:] = np.random.uniform(lower_bound, higher_bound, size=(nclass, 1))
         y = np.concatenate((np.ones(nclass), np.zeros(nclass)))
     else:
-        x2[nclass + 1:] = np.random.uniform(lower_bound, upper_bound, size=(nclass, 1))
+        x2[nclass + 1:] = np.random.uniform(lower_bound, higher_bound, size=(nclass, 1))
         y = np.concatenate((np.ones(nclass + 1), np.zeros(nclass)))
 
     shuffle = np.random.choice(nsamp, nsamp, replace=False)
@@ -180,28 +181,6 @@ def make_classes(x1, x2, lower_bound, upper_bound):
     y = torch.from_numpy(y[shuffle])
 
     return x1, x2, y
-
-
-def get_individual_images(x1, x2, nsamp):
-    """
-    Undo sets to output individual elements without zero elements and pads
-    Inputs
-        x1 : (array) [nsamp x 4 x 2] data tensor
-        x2 : (array) [nsamp x 1] H_0 tensor
-    Outputs
-        x1 : (array) [4 * nsamp x 2] data tensor
-        x2 : (array) [4 * nsamp x 1] H_0 tensor
-    """
-    x1 = x1.reshape(4 * nsamp, 2)
-    x2 = np.repeat(x2, 4)
-
-    idx_zeros = np.where(x1[:, 0] == 0)[0]
-    idx_pad = np.where(x1[:, 0] == -1)[0]
-    idx_out = np.concatenate((idx_zeros, idx_pad))
-    x1 = np.delete(x1, idx_out, axis=0)
-    x2 = np.delete(x2, idx_out, axis=0)
-
-    return x1, x2
 
 
 def split_data(file, path_in):
@@ -221,23 +200,23 @@ def split_data(file, path_in):
     pot = dataset["Fermat_potential"][:]
     H0 = dataset["Hubble_cst"][:]
     dataset.close()
+
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    nsamp = samples.shape[0]
+    samples = samples[samples != 0]
+    samples = samples.reshape(nsamp, 3, 2)
+    lower_bound = np.floor(np.min(H0))
+    higher_bound = np.ceil(np.max(H0))
 
     # Splitting sets
-    nsamp = H0.shape[0]
     keys = np.arange(nsamp)
     train_keys = np.random.choice(keys, size=int(.8 * nsamp), replace=False)
-    keys = np.setdiff1d(keys, train_keys)
-    valid_keys = np.random.choice(keys, size=int(.1 * nsamp), replace=False)
-    keys = np.setdiff1d(keys, valid_keys)
-    test_keys = np.random.choice(keys, size=1000, replace=False)
-    calib_keys = np.setdiff1d(keys, test_keys)
+    left_keys = np.setdiff1d(keys, train_keys)
+    valid_keys = np.random.choice(left_keys, size=int(.1 * nsamp), replace=False)
+    test_keys = np.setdiff1d(left_keys, valid_keys)
 
     x1_train, x2_train = samples[train_keys], H0[train_keys]
     x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
-
-    x1_train, x2_train = get_individual_images(x1_train, x2_train, x1_train.shape[0])
-    x1_valid, x2_valid = get_individual_images(x1_valid, x2_valid, x1_valid.shape[0])
 
     # Saving keys
     if not os.path.isfile(path_in + '/keys.hdf5'):
@@ -246,17 +225,13 @@ def split_data(file, path_in):
         train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
         valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
         test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
-        calib_ids = keys_file.create_dataset("calibration", test_keys.shape, dtype='i')
         train_ids[:] = train_keys
         valid_ids[:] = valid_keys
         test_ids[:] = test_keys
-        calib_ids[:] = calib_keys
 
     # Making labels + torch format
-    # lower_bound = np.floor(np.min(H0))
-    # upper_bound = np.ceil(np.max(H0))
-    # x1_train, x2_train, y_train = make_classes(x1_train, x2_train, lower_bound, upper_bound)
-    # x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid, lower_bound, upper_bound)
+    # x1_train, x2_train, y_train = make_classes(x1_train, x2_train, lower_bound, higher_bound)
+    # x1_valid, x2_valid, y_valid = make_classes(x1_valid, x2_valid, lower_bound, higher_bound)
 
     # Outputs
     train_set = [torch.from_numpy(x1_train), torch.from_numpy(x2_train)]
@@ -353,13 +328,8 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                 x2a = x2[:half_batch_size]
                 x2b = x2[half_batch_size:]
 
-                while torch.any(x2a == x2b):
-                    shuffled_idx = torch.randperm(half_batch_size)
-                    x1b = x1b[shuffled_idx]
-                    x2b = x2b[shuffled_idx]
-
-                y_dep = torch.ones(half_batch_size).to(device, non_blocking=True).long()
-                y_ind = torch.zeros(half_batch_size).to(device, non_blocking=True).long()
+                y_dep = torch.ones((half_batch_size)).to(device, non_blocking=True).long()
+                y_ind = torch.zeros((half_batch_size)).to(device, non_blocking=True).long()
 
                 # training phase
                 if phase == 'train':
@@ -388,7 +358,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                     # Backward Pass
                     loss.backward()
 
-                    if grad_clip:
+                    if grad_clip is not None:
                         clip_grad_norm_(model.parameters(), max_norm=grad_clip)
 
                     optimizer.step()
@@ -520,7 +490,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     dataset = h5py.File(file_data, 'r')
     H0 = dataset["Hubble_cst"][test_keys]
     lower_bound = np.floor(np.min(H0))
-    upper_bound = np.ceil(np.max(H0))
+    higher_bound = np.ceil(np.max(H0))
 
     # remove out of bounds data
     idx_up = np.where(H0 > 75.)[0]
@@ -534,18 +504,18 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     dataset.close()
 
     # reshape data
-    sets = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    sets = sets[:1000]
-    H0 = H0[:1000]
-    samples, H0_rep = get_individual_images(sets, H0, sets.shape[0])
+    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    samples = samples[:1000]
     nsamp = samples.shape[0]
+    samples = samples[samples != 0]
+    samples = samples.reshape(nsamp, 3, 2)
 
     # observations
     x = gaussian_noise(torch.from_numpy(samples))
     data = torch.repeat_interleave(x, npts, dim=0)
 
     # Global NRE posterior
-    gb_prior = np.linspace(lower_bound + 1, upper_bound - 1, npts).reshape(npts, 1)
+    gb_prior = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     gb_pr_tile = np.tile(gb_prior, (nsamp, 1))
     gb_ratios = np.zeros(nsamp * npts)
 
@@ -597,10 +567,10 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
             axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            #if np.count_nonzero(samples[it, 0] + 1) == 3:
-            #    axes[i, j].set_title("Quad")
-            #if np.count_nonzero(samples[it, 0] + 1) == 1:
-            #    axes[i, j].set_title("Double")
+            if np.count_nonzero(samples[it, 0] + 1) == 3:
+                axes[i, j].set_title("Quad")
+            if np.count_nonzero(samples[it, 0] + 1) == 1:
+                axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
             if i == int(nrow - 1):
                 axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")

@@ -37,23 +37,6 @@ def acc_fct(y_hat, y):
     return acc
 
 
-def noise(x, expo_time=1000, sig_bg=.001):
-    """
-    Adds noise to images
-    Inputs
-        x : (tensor)[batch_size x nchan x npix x npix] image
-        expo_time : (float) exposure time
-        sig_bg : (float) standard deviation of background noise
-    Outputs
-        noisy_im : (tensor)[batch_size x nchan x npix x npix] noisy image
-    """
-    poisson = sig_bg*torch.randn(x.size()) # poisson noise
-    bckgnd = torch.sqrt(abs(x)/expo_time)*torch.randn(x.size()) # background noise
-    noisy_im = bckgnd+poisson+x
-    
-    return noisy_im
-
-
 def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     """
     Adds noise to time delays

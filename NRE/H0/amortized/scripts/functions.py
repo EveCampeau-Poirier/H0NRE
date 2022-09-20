@@ -71,7 +71,7 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
     """
     nsamp = dt.shape[0]
     npts = H0.shape[0]
-    mu = np.zeros((nsamp, npts, 3))
+    mu = np.zeros((nsamp, npts, 3))  ###
     pad = -np.ones((2))
 
     for i in range(nsamp):
@@ -82,14 +82,15 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
             Ds = cosmo_model.angular_diameter_distance(zs[i])
             Dd = cosmo_model.angular_diameter_distance(zd[i])
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-            sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, fermat])
-            if len(fermat) == 1:
-                sim = np.concatenate((sim, pad), axis=None)
-            mu[i, j] = sim
+            time_delays = (1 + zd[i]) * Dd.value * Ds.value / Dds.value / c.value * fermat
+            time_delays *= (2 * np.pi / 360 / 3600) ** 2  # Conversion to days
+            if len(fermat) == 1:  ###
+                time_delays = np.concatenate((time_delays, pad), axis=None)
+            mu[i, j] = time_delays
 
     size = np.count_nonzero(dt + 1, axis=1)
-    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:,
-                                                                                                            None]
+    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** (size[:,
+                                                                                                             None] / 2)
 
     return lkh
 

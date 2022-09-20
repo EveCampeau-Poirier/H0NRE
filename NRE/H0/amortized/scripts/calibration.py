@@ -16,13 +16,13 @@ from simulator import training_set
 
 ts = training_set()
 
-# Allow reproducibility
+# Allow reproducability
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
 
-def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
+def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):  ###
     """
     Computes the analytical likelihood
     Inputs
@@ -34,7 +34,7 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
     """
     nsamp = dt.shape[0]
     npts = H0.shape[0]
-    mu = np.zeros((nsamp, npts, 4))
+    mu = np.zeros((nsamp, npts, 3))  ###
     pad = -np.ones((2))
 
     for i in range(nsamp):
@@ -45,14 +45,15 @@ def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):
             Ds = cosmo_model.angular_diameter_distance(zs[i])
             Dd = cosmo_model.angular_diameter_distance(zd[i])
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-            sim = ts.get_time_delays([zs[i], zd[i], Ds.value, Dd.value, Dds.value, 0, H0[j]], [0, 0, 0, fermat])
-            if len(fermat) == 2:
-                sim = np.concatenate((sim, pad), axis=None)
-            mu[i, j] = sim
+            time_delays = (1 + zd[i]) * Dd.value * Ds.value / Dds.value / c.value * fermat
+            time_delays *= (2 * np.pi / 360 / 3600) ** 2  # Conversion to days
+            if len(fermat) == 1:  ###
+                time_delays = np.concatenate((time_delays, pad), axis=None)
+            mu[i, j] = time_delays
 
     size = np.count_nonzero(dt + 1, axis=1)
-    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** size[:,
-                                                                                                            None]
+    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** (size[:,
+                                                                                                            None] / 2)
 
     return lkh
 
@@ -87,8 +88,8 @@ def get_datasets(file_keys, file_data):
     H0 = dataset["Hubble_cst"][calib_keys]
     dataset.close()
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    # samples = samples[samples != 0]
-    # samples = samples.reshape(nsamp, 3, 2)
+    samples = samples[samples != 0]  ###
+    samples = samples.reshape(nsamp, 3, 2)  ###
 
     x1_train, x2_train = samples[train_keys], H0[train_keys]
     x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
@@ -293,7 +294,7 @@ def temperature_scaling(file_model, file_keys, file_data, path_out, batch_size=1
     inference(x1_test, x2_test, model, temperature, path_out, nrow=5, ncol=4, npts=1000, batch_size=100)
 
 
-def gaussian_noise(x, sig_dt=.4, sig_pot=.003):
+def gaussian_noise(x, sig_dt=.3, sig_pot=.003):  ###
     """
     Adds noise to time delays
     Inputs
@@ -304,12 +305,12 @@ def gaussian_noise(x, sig_dt=.4, sig_pot=.003):
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
     mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
-    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)
+    # mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)###
     noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)))
-    # noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))
+    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)))  ###
     noisy_data = x.clone()
-    noisy_data[:, :, 0] += noise_dt * mask_pad * mask_zero
-    # noisy_data[:, :, 1] += noise_pot * mask
+    noisy_data[:, :, 0] += noise_dt * mask_pad  # * mask_zero###
+    noisy_data[:, :, 1] += noise_pot * mask_pad  ###
 
     return noisy_data
 
@@ -350,7 +351,7 @@ def inference(samples, H0, model, temperature, path_out, nrow=5, ncol=4, npts=10
 
     dataset_test = torch.utils.data.TensorDataset(data, torch.from_numpy(gb_pr_tile), torch.zeros((nsamp * npts)))
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
-    gb_probs, _ = evaluate(model.to(device), dataloader)  # , T_scaling, temperature=temperature)
+    gb_probs, _ = evaluate(model.to(device), dataloader, T_scaling, temperature=temperature)
 
     gb_ratios = gb_probs / (1 - gb_probs)
     gb_ratios = gb_ratios.reshape(nsamp, npts)
@@ -367,7 +368,7 @@ def inference(samples, H0, model, temperature, path_out, nrow=5, ncol=4, npts=10
 
     dataset_loc = torch.utils.data.TensorDataset(data, lc_prior.reshape(nsamp * npts, 1), torch.zeros((nsamp * npts)))
     dataloader = torch.utils.data.DataLoader(dataset_loc, batch_size=batch_size)
-    lc_probs, _ = evaluate(model.to(device), dataloader)  # , T_scaling, temperature=temperature)
+    lc_probs, _ = evaluate(model.to(device), dataloader, T_scaling, temperature=temperature)
     lc_ratios = lc_probs / (1 - lc_probs)
 
     # predictions
@@ -389,9 +390,9 @@ def inference(samples, H0, model, temperature, path_out, nrow=5, ncol=4, npts=10
             axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            if np.count_nonzero(samples[it, 0] + 1) == 3:
+            if np.count_nonzero(samples[it, 0] + 1) == 3:  ###
                 axes[i, j].set_title("Quad")
-            if np.count_nonzero(samples[it, 0] + 1) == 1:
+            if np.count_nonzero(samples[it, 0] + 1) == 1:  ###
                 axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
             if i == int(nrow - 1):

@@ -10,6 +10,7 @@ from scipy import integrate
 
 from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import c
+c = c.to('Mpc/d')  # Speed of light
 
 # PyTorch libraries
 import torch

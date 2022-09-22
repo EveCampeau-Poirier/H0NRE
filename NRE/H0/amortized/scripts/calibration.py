@@ -8,9 +8,12 @@ import os
 import random
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import seaborn as sns
 from functions import normalization
 
 from astropy.cosmology import FlatLambdaCDM
+from astropy.constants import c
+c = c.to('Mpc/d')  # Speed of light
 
 from simulator import training_set
 
@@ -461,6 +464,34 @@ def inference(samples, H0, model, temperature, path_out, nrow=5, ncol=4, npts=10
     # plt.rcParams['axes.facecolor'] = 'white'
     # plt.rcParams['savefig.facecolor'] = 'white'
     plt.savefig(path_out + '/coverage.png', bbox_inches='tight')
+
+
+def pp_plot(x, dist, line=True, ax=None):
+    '''
+    Function for comparing empirical data to a theoretical distribution by using a P-P plot.
+
+    Params:
+    x - empirical data
+    dist - distribution object from scipy.stats; for example scipy.stats.norm(0, 1)
+    line - boolean; specify if the reference line (y=x) should be drawn on the plot
+    ax - specified ax for subplots, None is standalone
+    '''
+    if ax is None:
+        ax = plt.figure().add_subplot(1, 1, 1)
+
+    n = len(x)
+    p = np.arange(1, n + 1) / n - 0.5 / n
+    pp = np.sort(dist.cdf(x))
+    sns.scatterplot(x=p, y=pp, color='blue', edgecolor='blue', ax=ax)
+    ax.set_title('PP-plot')
+    ax.set_xlabel('Theoretical Probabilities')
+    ax.set_ylabel('Sample Probabilities')
+    ax.margins(x=0, y=0)
+
+    if line:
+        plt.plot(np.linspace(0, 1), np.linspace(0, 1), 'r', lw=2)
+
+    return ax
 
 
 #############################################################################

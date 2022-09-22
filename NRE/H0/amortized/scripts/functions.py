@@ -8,6 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from astropy.cosmology import FlatLambdaCDM
+from astropy.constants import c
+c = c.to('Mpc/d')  # Speed of light
 
 from simulator import training_set
 

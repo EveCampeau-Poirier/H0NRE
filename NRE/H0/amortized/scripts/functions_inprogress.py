@@ -125,16 +125,13 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
     Outputs
         post : (array)[nsamp x npts] posterior
     """
+
     nsamp = time_delays.shape[0]
     npts = H0.shape[0]
     post = np.ones((nsamp, npts))
-    ############################################
-    #time_delays = time_delays[time_delays != 0.]
-    #time_delays = time_delays.reshape(nsamp, 3)
-    #fermat_pot = fermat_pot[fermat_pot != 0.]
-    #fermat_pot = fermat_pot.reshape(nsamp, 3)
-    ########################################
     for i in range(nsamp):
+        print(i)
+        start = time.time()
         size = np.count_nonzero(time_delays[i] + 1.)
         dt = time_delays[i][time_delays[i] != -1].reshape(size)
         pot = fermat_pot[i][fermat_pot[i] != -1].reshape(size)
@@ -151,7 +148,7 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
 
                 I, _ = integrate.dblquad(integrand, xa, xb, ya, yb, args=(H0[j], zs[i], zd[i], dt[k], pot[k], sig_dt, sig_pot))
                 post[i, j] *= I
-
+        print(time.time() - start)
     return post
 
 

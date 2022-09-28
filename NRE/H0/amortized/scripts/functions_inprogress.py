@@ -91,7 +91,7 @@ def time_delays_eq(fermat, H0, zs, zd):
     return time_delays
 
 
-def integrand(dt, dphi, H0, zs, zd, time_delays, fermat_pot, sig_dt, sig_pot):
+def integrand_double(dt, dphi, H0, zs, zd, time_delays, fermat_pot, sig_dt, sig_pot):
     """
     Function to integrate to estimate the posterior distribution
     Inputs
@@ -108,6 +108,29 @@ def integrand(dt, dphi, H0, zs, zd, time_delays, fermat_pot, sig_dt, sig_pot):
         I : (float) Evaluation of the integrand
     """
     I = gaussian(dt, time_delays_eq(dphi, H0, zs, zd), sig_dt) * gaussian(dt, time_delays, sig_dt) * gaussian(dphi, fermat_pot, sig_pot)
+    return I
+
+
+def integrand_quad(dt1, dt2, dt3, dphi1, dphi2, dphi3, H0, zs, zd, time_delays, fermat_pot, sig_dt, sig_pot):
+    """
+    Function to integrate to estimate the posterior distribution
+    Inputs
+        dt : Variable to integrate over the time delays
+        dphi : Variable to integrate over the potentials
+        H0 : (float) Grid of H0 values
+        zs : (float) Source's redshift
+        zd : (float) Deflector's redshift
+        time_delays : (float) Measured time delays
+        fermat_pot : (float) Modeled Fermat potentials
+        sig_dt : (float) Time delays standard deviation
+        sig_pot : (float) Fermat potentils standard deviation
+    Outputs
+        I : (float) Evaluation of the integrand
+    """
+    dt = np.array([dt1, dt2, dt3])
+    dphi = np.array([dphi1, dphi2, dphi3])
+    I = gaussian(dt, time_delays_eq(dphi, H0, zs, zd), sig_dt) * gaussian(dt, time_delays, sig_dt) * gaussian(dphi, fermat_pot, sig_pot)
+    I = np.prod(I)
     return I
 
 
@@ -129,26 +152,45 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
     nsamp = time_delays.shape[0]
     npts = H0.shape[0]
     post = np.ones((nsamp, npts))
+
     for i in range(nsamp):
         print(i)
         start = time.time()
         size = np.count_nonzero(time_delays[i] + 1.)
         dt = time_delays[i][time_delays[i] != -1].reshape(size)
         pot = fermat_pot[i][fermat_pot[i] != -1].reshape(size)
+
+        if size == 1:
+            limit_dt = [dt - 3 * sig_dt, dt + 3 * sig_dt]
+            limit_dphi = [pot - 3 * sig_pot, pot + 3 * sig_pot]
+
+        if size == 3:
+            limit_dt1 = [dt[0] - 3 * sig_dt, dt[0] + 3 * sig_dt]
+            limit_dt2 = [dt[1] - 3 * sig_dt, dt[1] + 3 * sig_dt]
+            limit_dt3 = [dt[2] - 3 * sig_dt, dt[2] + 3 * sig_dt]
+            limit_dphi1 = [pot[0] - 3 * sig_pot, pot[0] + 3 * sig_pot]
+            limit_dphi2 = [pot[1] - 3 * sig_pot, pot[1] + 3 * sig_pot]
+            limit_dphi3 = [pot[2] - 3 * sig_pot, pot[2] + 3 * sig_pot]
+
         for j in range(npts):
-            for k in range(size):
-                xa = pot[k] - 3 * sig_pot
-                xb = pot[k] + 3 * sig_pot
 
-                def ya(x):
-                    return dt[k] - 3 * sig_dt
+            if j%100 == 0:
+                print(j)
 
-                def yb(x):
-                    return dt[k] + 3 * sig_dt
+            if size == 1:
+                I, _ = integrate.nquad(integrand_double,
+                                       [limit_dt, limit_dphi],
+                                       args=(H0[j], zs[i], zd[i], dt, pot, sig_dt, sig_pot))
+                post[i, j] = I
 
-                I, _ = integrate.dblquad(integrand, xa, xb, ya, yb, args=(H0[j], zs[i], zd[i], dt[k], pot[k], sig_dt, sig_pot))
-                post[i, j] *= I
+            if size == 3:
+                I, _ = integrate.nquad(integrand_quad,
+                                       [limit_dt1, limit_dt2, limit_dt3, limit_dphi1, limit_dphi2, limit_dphi3],
+                                       args=(H0[j], zs[i], zd[i], dt, pot, sig_dt, sig_pot))
+                post[i, j] = I
+
         print(time.time() - start)
+
     return post
 
 

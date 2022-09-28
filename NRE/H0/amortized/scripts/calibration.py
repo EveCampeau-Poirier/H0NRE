@@ -1,64 +1,31 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
+from torchquad import Simpson, set_up_backend
+if torch.cuda.is_available():
+    set_up_backend("cuda:0")
+
 import h5py
 import argparse
 import os
 import random
+
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import numpy as np
+
 import seaborn as sns
-from functions import normalization
+from functions import normalization, analytical_posterior
 
 from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import c
 c = c.to('Mpc/d')  # Speed of light
 
-from simulator import training_set
-
-ts = training_set()
-
 # Allow reproducability
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
-
-
-def analytical_likelihood(dt, pot, H0, zs, zd, sig_dt=.3, sig_pot=.003):  ###
-    """
-    Computes the analytical likelihood
-    Inputs
-        x : (array)[test set size x 4] Noisy time delays
-        mu : (array)[test set size x 4] True time delays
-        sigma : (float) noise standard deviation on time delays
-    Outputs
-        lkh_doub : (tensor)[nsamp x npts] Likelihood
-    """
-    nsamp = dt.shape[0]
-    npts = H0.shape[0]
-    mu = np.zeros((nsamp, npts, 3))  ###
-    pad = -np.ones((2))
-
-    for i in range(nsamp):
-        for j in range(npts):
-            fermat = pot[i]
-            fermat = fermat[fermat != -1]
-            cosmo_model = FlatLambdaCDM(H0=H0[j], Om0=.3)
-            Ds = cosmo_model.angular_diameter_distance(zs[i])
-            Dd = cosmo_model.angular_diameter_distance(zd[i])
-            Dds = cosmo_model.angular_diameter_distance_z1z2(zd[i], zs[i])
-            time_delays = (1 + zd[i]) * Dd.value * Ds.value / Dds.value / c.value * fermat
-            time_delays *= (2 * np.pi / 360 / 3600) ** 2  # Conversion to days
-            if len(fermat) == 1:  ###
-                time_delays = np.concatenate((time_delays, pad), axis=None)
-            mu[i, j] = time_delays
-
-    size = np.count_nonzero(dt + 1, axis=1)
-    lkh = np.exp(-np.sum((dt[:, None] - mu) ** 2, axis=2) / 2 / sig_dt ** 2) / (2 * np.pi * sig_dt ** 2) ** (size[:,
-                                                                                                            None] / 2)
-
-    return lkh
 
 
 def get_labels(x2):
@@ -386,7 +353,7 @@ def inference(samples, H0, model, temperature, path_out, nrow=5, ncol=4, npts=10
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            axes[i, j].plot(gb_prior, analytic[it], '--g', label='{:.2f}'.format(lc_prior[it][np.argmax(analytic[it])]))
+            axes[i, j].plot(gb_prior, analytic[it], '--g', label='{:.2f}'.format(gb_prior[np.argmax(lkh[it])]))
             axes[i, j].plot(gb_prior, gb_ratios[it], '-b', label='{:.2f}'.format(pred[it]))
             min_post = np.minimum(np.min(gb_ratios[it]), np.min(analytic[it]))
             max_post = np.maximum(np.max(gb_ratios[it]), np.max(analytic[it]))

@@ -680,9 +680,9 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
             axes[i, j].vlines(true[it], min_post, max_post, colors='r', linestyles='dotted',
                               label='{:.2f}'.format(true[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            if np.count_nonzero(samples[it, 0] + 1) == 3:
+            if np.count_nonzero(samples[it, :, 0] + 1) == 3:
                 axes[i, j].set_title("Quad")
-            if np.count_nonzero(samples[it, 0] + 1) == 1:
+            if np.count_nonzero(samples[it, :, 0] + 1) == 1:
                 axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
             if i == int(nrow - 1):

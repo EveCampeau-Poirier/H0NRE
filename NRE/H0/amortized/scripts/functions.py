@@ -540,16 +540,16 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
 
     # import data
     dataset = h5py.File(file_data, 'r')
-    H0 = dataset["Hubble_cst"][test_keys]
-    lower_bound = np.floor(np.min(H0))
-    higher_bound = np.ceil(np.max(H0))
+    truths = dataset["Hubble_cst"][test_keys]
+    lower_bound = np.floor(np.min(truths))
+    higher_bound = np.ceil(np.max(truths))
 
     # remove out of bounds data
-    idx_up = np.where(H0 > 75.)[0]
-    idx_down = np.where(H0 < 65.)[0]
+    idx_up = np.where(truths > 75.)[0]
+    idx_down = np.where(truths < 65.)[0]
     idx_out = np.concatenate((idx_up, idx_down))
-    H0 = np.delete(H0, idx_out, axis=0)
-    H0 = H0.flatten()
+    truths = np.delete(truths, idx_out, axis=0)
+    truths = truths.flatten()
     test_keys = np.delete(test_keys, idx_out, axis=0)
     dt = dataset["time_delays"][test_keys]
     pot = dataset["Fermat_potential"][test_keys]
@@ -564,14 +564,14 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     samples = samples.reshape(nsamp, 3, 2)
 
     # observations
-    x = gaussian_noise(torch.from_numpy(samples))
-    data = torch.repeat_interleave(x, npts, dim=0)
+    noisy_data = gaussian_noise(torch.from_numpy(samples))
+    noisy_data_repeated = torch.repeat_interleave(x, npts, dim=0)
 
     # Global NRE posterior
     support = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     support_tile = np.tile(support, (nsamp, 1))
 
-    dataset_test = torch.utils.data.TensorDataset(data, torch.from_numpy(support_tile))
+    dataset_test = torch.utils.data.TensorDataset(noisy_data_repeated, torch.from_numpy(support_tile))
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     ratios = []
     for x1, x2 in dataloader:
@@ -579,14 +579,15 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
         ratios.extend(preds)
 
     ratios = np.asarray(ratios).reshape(nsamp, npts)
-    ratios = normalization(support_tile.reshape(nsamp, npts), ratios)
+    support_tile = support_tile.reshape(nsamp, npts)
+    ratios = normalization(support_tile, ratios)
 
     # predictions
-    arg_pred = np.argmax(ratios.reshape(nsamp, npts), axis=1)
-    pred = support[np.arange(nsamp), arg_pred].detach().cpu().numpy()
+    arg_pred = np.argmax(ratios, axis=1)
+    pred = support_tile[np.arange(nsamp), arg_pred]
 
     # analytical posterior
-    analytic = analytical_posterior(x[:, :, 0].numpy(), x[:, :, 1].numpy(), support, z[:, 1], z[:, 0])
+    analytic = analytical_posterior(noisy_data[:, :, 0].numpy(), noisy_data[:, :, 1].numpy(), support, z[:, 1], z[:, 0])
     analytic = normalization(support, analytic)
 
     it = 0
@@ -597,12 +598,12 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
             axes[i, j].plot(support, ratios[it], '-b', label='{:.2f}'.format(pred[it]))
             min_post = np.minimum(np.min(ratios[it]), np.min(analytic[it]))
             max_post = np.maximum(np.max(ratios[it]), np.max(analytic[it]))
-            axes[i, j].vlines(float(H0[it]), min_post, max_post, colors='r', linestyles='dotted',
-                              label='{:.2f}'.format(float(H0[it])))
+            axes[i, j].vlines(truths[it], min_post, max_post, colors='r', linestyles='dotted',
+                              label='{:.2f}'.format(truths[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            if np.count_nonzero(samples[it, 0] + 1) == 3:
+            if np.count_nonzero(samples[it, :, 0] + 1) == 3:
                 axes[i, j].set_title("Quad")
-            if np.count_nonzero(samples[it, 0] + 1) == 1:
+            if np.count_nonzero(samples[it, :, 0] + 1) == 1:
                 axes[i, j].set_title("Double")
             # axes[i, j].yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
             if i == int(nrow - 1):
@@ -622,16 +623,16 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     post_file = h5py.File(path_out + "/posteriors.hdf5", 'a')
 
     NRE = post_file.create_group("NRE_global")
-    H0 = NRE.create_dataset("H0", (npts,), dtype='f')
+    H0 = NRE.create_dataset("Hubble_cst", (npts,), dtype='f')
     post = NRE.create_dataset("posterior", (nsamp, npts), dtype='f')
     post_anl = NRE.create_dataset("analytical", (nsamp, npts), dtype='f')
 
     truth_set = post_file.create_dataset("truth", (nsamp,), dtype='f')
 
-    H0[:] = support
+    H0[:] = support.flatten()
     post[:, :] = ratios
     post_anl[:, :] = analytic
-    truth_set[:] = H0
+    truth_set[:] = truths[:nsamp]
 
     post_file.close()
 
@@ -639,7 +640,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     credibility = np.zeros((nsamp,))
     for i in range(nsamp):
 
-        idx_truth = np.where(abs(support - H0[i]) == np.min(abs(support - H0[i])))[0]
+        idx_truth = np.where(abs(support - truths[i]) == np.min(abs(support - truths[i])))[0]
         probs = ratios[i]
         prob_truth = probs[idx_truth]
 

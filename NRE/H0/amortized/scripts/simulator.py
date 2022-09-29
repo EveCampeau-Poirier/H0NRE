@@ -712,7 +712,7 @@ class training_set(object):
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd, zs)
             # Velocity dispersion (Mpc/day)
             vdisp = (np.random.uniform(225., 275.) * u.km / u.s).to('Mpc/d')  # 150,300 ou fixe 300
-            # Einstein radius (arcsec)
+            # Einstein radius (arcsec) eq. (3.17) of Bartelmann Scheneider
             theta_E = 4 * np.pi * (vdisp / c) ** 2 * Dds / Ds * 180 * 3600 / np.pi
             if theta_E < .5 or theta_E > 2.:  # .4 or 2.5
                 print('Einstein radius out of bounds : {}'.format(theta_E))

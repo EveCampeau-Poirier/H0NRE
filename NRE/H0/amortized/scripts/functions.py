@@ -565,7 +565,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
 
     # observations
     noisy_data = gaussian_noise(torch.from_numpy(samples))
-    noisy_data_repeated = torch.repeat_interleave(x, npts, dim=0)
+    noisy_data_repeated = torch.repeat_interleave(noisy_data, npts, dim=0)
 
     # Global NRE posterior
     support = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
@@ -587,6 +587,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
     pred = support_tile[np.arange(nsamp), arg_pred]
 
     # analytical posterior
+    support = support.flatten()
     analytic = analytical_posterior(noisy_data[:, :, 0].numpy(), noisy_data[:, :, 1].numpy(), support, z[:, 1], z[:, 0])
     analytic = normalization(support, analytic)
 
@@ -629,14 +630,14 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
 
     truth_set = post_file.create_dataset("truth", (nsamp,), dtype='f')
 
-    H0[:] = support.flatten()
+    H0[:] = support
     post[:, :] = ratios
     post_anl[:, :] = analytic
     truth_set[:] = truths[:nsamp]
 
     post_file.close()
 
-    # integration from pred to true
+    # Highest probability density region
     credibility = np.zeros((nsamp,))
     for i in range(nsamp):
 
@@ -646,7 +647,12 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=1
 
         prob_false = probs.copy()
         prob_false[idx_truth] = 0.
-        idx_equal_prob = np.where(abs(prob_false - prob_truth) == np.min(abs(prob_false - prob_truth)))
+        idx_equal_prob = np.where(abs(prob_false - prob_truth) == np.min(abs(prob_false - prob_truth)))[0]
+
+        if len(idx_equal_prob) != 1:
+            if idx_equal_prob[0] == idx_truth - 1 and idx_equal_prob[1] == idx_truth + 1:
+                credibility[i] = 0
+            continue
 
         start = np.minimum(idx_truth, idx_equal_prob)
         end = np.maximum(idx_truth, idx_equal_prob)

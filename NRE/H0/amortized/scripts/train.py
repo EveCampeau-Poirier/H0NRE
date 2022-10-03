@@ -10,7 +10,8 @@ from torch.optim import Adamax
 from torch.optim.lr_scheduler import StepLR
 
 # Functions
-from functions_inprogress import acc_fct, train_fn, learning_curves, inference
+from training_utils import acc_fct, train_fn, learning_curves
+from inference_utils import inference
 
 # Model
 from networks import MLP, DeepSets, SetTransformer

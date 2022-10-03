@@ -395,9 +395,6 @@ class training_set(object):
             return xsrc - x * np.sin(varphi) + alphax(varphi) + gamma1 * (x * np.sin(varphi) + xtrans) + gamma2 * (
                         x * np.cos(varphi) + ytrans)
 
-        def roots_func(varphi):
-            return [y_lens_eq(varphi), x_lens_eq(varphi)]
-
         # Root function evaluated on its whole domain
         varphi = np.linspace(0, 2 * np.pi, 1000)
         yval = y_lens_eq(varphi)
@@ -840,7 +837,7 @@ class training_set(object):
                 set_param[it, :] = param
                 set_shft[it, :] = np.array([zd, zs])
                 if len(fermat_pot) == 2:
-                    pad = -np.ones((2))
+                    pad = -np.ones(2)
                     fermat_pot = np.concatenate((fermat_pot - np.min(fermat_pot), pad), axis=None)
                     xim = np.concatenate((xim, pad), axis=None)
                     yim = np.concatenate((yim, pad), axis=None)

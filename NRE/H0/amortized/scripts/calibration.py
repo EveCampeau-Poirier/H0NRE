@@ -16,7 +16,7 @@ import matplotlib.patches as mpatches
 import numpy as np
 
 import seaborn as sns
-from functions import normalization, analytical_posterior
+from training_utils import normalization, analytical_posterior
 
 from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import c

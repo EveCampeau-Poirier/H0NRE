@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from astropy.cosmology import FlatLambdaCDM
+from astropy import units as u
 from astropy.constants import c
 c = c.to('Mpc/d')  # Speed of light
 
@@ -16,13 +17,30 @@ from torchquad import Simpson, set_up_backend
 if torch.cuda.is_available():
     set_up_backend("cuda:0")
 
-from simulator import mtx_rot, norm, pol2cart, cart2pol
-
 torch.manual_seed(0)
 np.random.seed(0)
 
 
-# --- Functions for training -----------------------------------------------
+# --- -----------------------------------------------
+
+# NORM
+def norm(x, y):
+    return torch.sqrt(x ** 2 + y ** 2)
+
+
+# ROTATION MATRIX
+def mtx_rot(phi):
+    return torch.tensor([[np.cos(phi), -np.sin(phi)],
+                         [np.sin(phi), np.cos(phi)]])
+
+# CARTESIAN COORDINATES TO SPHERICAL
+def cart2pol(x, y):
+    return norm(x, y), torch.arctan2(y, x)
+
+
+# SPHERICAL COORDINATES TO CARTESIAN
+def pol2cart(r, theta):
+    return r * torch.cos(theta), r * torch.sin(theta)
 
 def gaussian_noise(x, sig_dt=.3, sig_pot=.003):
     """
@@ -73,7 +91,7 @@ def get_time_delays(fermat, zd, Dd, Ds, Dds):
     time_delays = (1 + zd) * Dd.value * Ds.value / Dds.value / c.value * fermat
     time_delays *= (2 * np.pi / 360 / 3600) ** 2  # Conversion to days
     if np.count_nonzero(fermat + 1) == 2:
-        time_delays[2:] = -np.ones(2)
+        time_delays[2:] = -torch.ones(2)
 
     return time_delays
 
@@ -87,28 +105,28 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
     f_prime = np.sqrt(1 - f ** 2)
 
     # Image positions in the lens coordinate system
-    xim, yim = np.tensordot(mtx_rot(-phi), np.array([xim_fov - x0_lens, yim_fov - y0_lens]), axes=1)
+    xim, yim = torch.tensordot(mtx_rot(-phi), torch.tensor([xim_fov - x0_lens, yim_fov - y0_lens]), dims=1)
     r_im, phi_im = cart2pol(xim, yim)
     # AGN positions in the lens coordinate system
-    xsrc, ysrc = np.tensordot(mtx_rot(-phi), np.array([x0_AGN - x0_lens, y0_AGN - y0_lens]), axes=1)
+    xsrc, ysrc = torch.tensordot(mtx_rot(-phi), torch.tensor([x0_AGN - x0_lens, y0_AGN - y0_lens]), dims=1)
     # Coordinate translation for the external shear
-    xtrans, ytrans = np.tensordot(mtx_rot(-phi), np.array([x0_lens, y0_lens]), axes=1)
+    xtrans, ytrans = torch.tensordot(mtx_rot(-phi), torch.tensor([x0_lens, y0_lens]), dims=1)
 
     # External shear in the lens coordinate system
     gamma1_fov, gamma2_fov = pol2cart(gamma_ext, phi_ext)
-    gamma1, gamma2 = np.tensordot(mtx_rot(-2 * phi), np.array([gamma1_fov, gamma2_fov]), axes=1)
+    gamma1, gamma2 = torch.tensordot(mtx_rot(-2 * phi), torch.tensor([gamma1_fov, gamma2_fov]), dims=1)
 
     # X deflection angle (eq. 27a Kormann et al. 1994)
     def alphax(varphi):
-        return theta_E * np.sqrt(f) / f_prime * np.arcsin(f_prime * np.sin(varphi))
+        return theta_E * np.sqrt(f) / f_prime * torch.arcsin(f_prime * torch.sin(varphi))
 
     # Y deflection angle (eq. 27a Kormann et al. 1994)
     def alphay(varphi):
-        return theta_E * np.sqrt(f) / f_prime * np.arcsinh(f_prime / f * np.cos(varphi))
+        return theta_E * np.sqrt(f) / f_prime * torch.arcsinh(f_prime / f * torch.cos(varphi))
 
     # Lens potential deviation from a SIS (Meneghetti, 19_2018, psi_tilde)
     def psi_tilde(varphi):
-        return np.sin(varphi) * alphax(varphi) + np.cos(varphi) * alphay(varphi)
+        return torch.sin(varphi) * alphax(varphi) + torch.cos(varphi) * alphay(varphi)
 
     # Lens potential (eq. 26a Kormann et al. 1994)
     def lens_pot(varphi):
@@ -120,11 +138,11 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
 
     # Radial componant (eq. 34 Kormann et al. 1994)
     def radial(varphi):
-        usual_rad = ysrc * np.cos(varphi) + xsrc * np.sin(varphi) + psi_tilde(varphi)
-        translation = gamma1 * (xtrans * np.sin(varphi) - ytrans * np.cos(varphi)) + gamma2 * (
-                    xtrans * np.cos(varphi) + ytrans * np.sin(varphi))
-        shear_term = 1 + gamma1 * (np.cos(varphi) ** 2 - np.sin(varphi) ** 2) - 2 * gamma2 * np.cos(
-            varphi) * np.sin(varphi)
+        usual_rad = ysrc * torch.cos(varphi) + xsrc * torch.sin(varphi) + psi_tilde(varphi)
+        translation = gamma1 * (xtrans * torch.sin(varphi) - ytrans * torch.cos(varphi)) + gamma2 * (
+                    xtrans * torch.cos(varphi) + ytrans * torch.sin(varphi))
+        shear_term = 1 + gamma1 * (torch.cos(varphi) ** 2 - torch.sin(varphi) ** 2) - 2 * gamma2 * torch.cos(
+            varphi) * torch.sin(varphi)
         return (usual_rad + translation) / shear_term
 
     # Fermat potential
@@ -133,9 +151,9 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
     shear_term = shear_pot(xim + xtrans, yim + ytrans)
     fermat_pot = geo_term - lens_term - shear_term
 
-    fermat_pot = fermat_pot - np.min(fermat_pot)
-    if np.count_nonzero(xim_fov + 1.) == 2:
-        fermat_pot[2:] = -np.ones(2)
+    fermat_pot = fermat_pot - torch.min(fermat_pot)
+    if float(torch.count_nonzero(xim_fov + 1.)) == 2:
+        fermat_pot[2:] = -torch.ones(2)
 
     return fermat_pot
 

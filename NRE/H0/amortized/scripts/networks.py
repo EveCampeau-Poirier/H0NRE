@@ -223,3 +223,59 @@ class SetTransformer(nn.Module):
         x = self.dec(x)
 
         return x
+
+
+###################### CNN ########################
+
+class AccOverFeat96(nn.Module):
+    def __init__(self):
+        super(AccOverFeat96, self).__init__()
+
+        self.conv_layer = nn.Sequential(
+            # First layer
+            nn.Conv2d(1, 8, kernel_size=2, stride=2, padding=0),  # 48
+            nn.BatchNorm2d(8),
+            nn.ReLU(),
+            # Pooling
+            nn.Conv2d(8, 24, kernel_size=2, stride=2, padding=0),  # 24
+
+            # Second layer
+            nn.Conv2d(24, 36, kernel_size=3, stride=1, padding=0),  # 22
+            nn.BatchNorm2d(36),
+            nn.ReLU(),
+            # Pooling
+            nn.Conv2d(36, 36, kernel_size=2, stride=2, padding=0),  # 11
+
+            # Third layer
+            nn.Conv2d(36, 72, kernel_size=3, stride=1, padding=1),  # 11
+            nn.BatchNorm2d(72),
+            nn.ReLU(),
+
+            # Fourth layer
+            nn.Conv2d(72, 72, kernel_size=3, stride=1, padding=1),  # 11
+            nn.BatchNorm2d(72),
+            nn.ReLU(),
+
+            # Fifth layer
+            nn.Conv2d(72, 144, kernel_size=3, stride=1, padding=1),  # 11
+            nn.BatchNorm2d(144),
+            nn.ReLU(),
+
+            # Sixth layer
+            nn.Conv2d(144, 144, kernel_size=3, stride=1, padding=1),  # 11
+            nn.BatchNorm2d(144),
+            nn.ReLU(),
+            # Pooling
+            nn.Conv2d(144, 144, kernel_size=3, stride=2, padding=0)  # 5
+        )
+        self.lin_layer = nn.Sequential(
+            nn.Linear(3600, 3600),
+            nn.ReLU(),
+            nn.Linear(3600, 7)
+        )
+
+    def forward(self, x):
+        x = self.conv_layer(x)
+        x = x.view(x.size(0), -1)
+        x = self.lin_layer(x)
+        return x

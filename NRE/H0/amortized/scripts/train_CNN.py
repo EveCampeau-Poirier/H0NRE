@@ -10,7 +10,7 @@ from torch.optim import Adamax
 from torch.optim.lr_scheduler import StepLR
 
 # Functions
-from lens_modeling import acc_fct, train_fn, learning_curves, evaluation
+from lens_modeling import acc_fct, train_fn, learning_curves, modeling, inference
 
 # Model
 from networks import AccOverFeat96
@@ -20,10 +20,10 @@ if __name__ == "__main__":
 
     # --- Training ---------------------------------------------------------
     parser = argparse.ArgumentParser(description="Train a classifier to be an estimator of the likelihood ratio of H_0")
-    parser.add_argument("--path_in", type=str, default="", help="path to data")
+    parser.add_argument("--path_data", type=str, default="", help="path to data")
+    parser.add_argument("--path_NRE", type=str, default="", help="path to data")
     parser.add_argument("--path_out", type=str, default="", help="path to save the outputs")
     parser.add_argument("--path_hyper", type=str, default="", help="path to the hyperparameter file")
-    parser.add_argument("--data_file", type=str, default="dataset.hdf5", help="filename of dataset")
     parser.add_argument("--sched", type=bool, default=False, help="True if a learning rate scheduler is needed")
     parser.add_argument("--anomaly", type=bool, default=False, help="True if detect_anomaly is needed")
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
@@ -56,21 +56,20 @@ if __name__ == "__main__":
     else:
         scheduler = None
 
-    mean, std = train_fn(model=nn,
-                         file=args.data_file,
-                         path_in=args.path_in,
-                         path_out=args.path_out,
-                         optimizer=opt,
-                         loss_fn=loss_fct,
-                         acc_fn=acc_fct,
-                         threshold=thresh,
-                         sched=scheduler,
-                         grad_clip=max_norm,
-                         anomaly_detection=args.anomaly,
-                         batch_size=args.batch_size,
-                         epochs=args.nepochs,
-                         std_noise=args.std_noise
-                         )
+    train_fn(model=nn,
+             path_in=args.path_data,
+             path_out=args.path_out,
+             optimizer=opt,
+             loss_fn=loss_fct,
+             acc_fn=acc_fct,
+             threshold=thresh,
+             sched=scheduler,
+             grad_clip=max_norm,
+             anomaly_detection=args.anomaly,
+             batch_size=args.batch_size,
+             epochs=args.nepochs,
+             std_noise=args.std_noise
+             )
 
     # --- Results ----------------------------------------------------------
 
@@ -79,6 +78,7 @@ if __name__ == "__main__":
 
     learning_curves(os.path.join(args.path_out, "logs.hdf5"), os.path.join(args.path_out, "plots"))
 
-    evaluation(os.path.join(args.path_in, "keys.hdf5"), os.path.join(args.path_in, args.data_file),
-               args.path_out + "/models/" + "trained_model.pt", os.path.join(args.path_out, "plots"),
-               mean, std)
+    param_estimate = modeling(os.path.join(args.path_data, "keys.hdf5"), os.path.join(args.path_data, "dataset.hdf5"),
+                              args.path_out + "/models/" + "trained_model.pt", os.path.join(args.path_out, "plots"))
+
+    inference(param_estimate, os.path.join(args.path_NRE, "trained_model.pt"), os.path.join(args.path_out, "plots"))

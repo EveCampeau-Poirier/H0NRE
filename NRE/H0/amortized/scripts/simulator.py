@@ -238,8 +238,8 @@ class training_set(object):
 
         # Parameters
         gamma_ext, phi_ext = param[5:7]
-        gamma1 = gamma_ext * np.cos(phi_ext)
-        gamma2 = gamma_ext * np.sin(phi_ext)
+        gamma1 = gamma_ext * np.cos(phi_ext) # Missing factor 2?
+        gamma2 = gamma_ext * np.sin(phi_ext) # Missing factor 2?
         # Shear matrix
         ext_shear = np.array([[gamma1, gamma2],
                               [gamma2, -gamma1]])

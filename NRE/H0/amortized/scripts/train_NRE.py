@@ -5,15 +5,16 @@ import numpy as np
 
 # Librairies PyTorch
 import torch
-from torch.nn import MSELoss
+from torch.nn import CrossEntropyLoss
 from torch.optim import Adamax
 from torch.optim.lr_scheduler import StepLR
 
 # Functions
-from lens_modeling import acc_fct, train_fn, learning_curves, modeling, inference
+from train_from_cnn import train_fn, inference
+from functions import acc_fct, learning_curves
 
 # Model
-from networks import AccOverFeat96
+from networks import MLP, DeepSets, SetTransformer
 
 # --- Execution ------------------------------------------------------------
 if __name__ == "__main__":
@@ -21,14 +22,17 @@ if __name__ == "__main__":
     # --- Training ---------------------------------------------------------
     parser = argparse.ArgumentParser(description="Train a classifier to be an estimator of the likelihood ratio of H_0")
     parser.add_argument("--path_data", type=str, default="", help="path to data")
-    parser.add_argument("--path_NRE", type=str, default="", help="path to data")
+    parser.add_argument("--file_cnn", type=str, default="", help="path to the CNN weights")
     parser.add_argument("--path_out", type=str, default="", help="path to save the outputs")
     parser.add_argument("--path_hyper", type=str, default="", help="path to the hyperparameter file")
+    parser.add_argument("--architecture", type=str, default="SetTransformer", help="Network's architecture")
+    parser.add_argument("--weights_file", type=str, default=False, help="filename of weights")
     parser.add_argument("--sched", type=bool, default=False, help="True if a learning rate scheduler is needed")
     parser.add_argument("--anomaly", type=bool, default=False, help="True if detect_anomaly is needed")
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
     parser.add_argument("--nepochs", type=int, default=100, help="number of training epochs")
-    parser.add_argument("--std_noise", type=float, default=.04, help="Noise standard deviation")
+    parser.add_argument("--num_heads", type=int, default=4, help="Nbr of attention heads")
+    parser.add_argument("--dim_heads", type=int, default=32, help="Size of each attention head")
 
     args = parser.parse_args()
 
@@ -43,11 +47,17 @@ if __name__ == "__main__":
         freq, factor, thresh = np.loadtxt(args.path_hyper + "/hyparams.txt", unpack=True)
         p_drop, L2, rate, max_norm = 0., 0., 1e-4, None
     else:
-        p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 250, .8, 1000
+        p_drop, L2, rate, max_norm, freq, factor, thresh = 0., 0., 1e-4, None, 100, .75, 1000
 
-
-    nn = AccOverFeat96()
-    loss_fct = MSELoss()
+    if args.architecture == "DeepSets":
+        nn = DeepSets()
+    elif args.architecture == "SetTransformer":
+        nn = SetTransformer(dim_heads=args.dim_heads, num_heads=args.num_heads)
+    elif args.architecture == "MLP":
+        nn = MLP()
+    if args.weights_file:
+        nn.load_state_dict(torch.load(args.weights_file))
+    loss_fct = CrossEntropyLoss()
     opt = Adamax(nn.parameters(), lr=rate, weight_decay=L2)
 
     # Scheduler
@@ -55,9 +65,10 @@ if __name__ == "__main__":
         scheduler = StepLR(opt, step_size=freq, gamma=factor)
     else:
         scheduler = None
-    """
+
     train_fn(model=nn,
-             path_in=args.path_data,
+             file_cnn=args.file_cnn,
+             path_data=args.path_data,
              path_out=args.path_out,
              optimizer=opt,
              loss_fn=loss_fct,
@@ -67,9 +78,7 @@ if __name__ == "__main__":
              grad_clip=max_norm,
              anomaly_detection=args.anomaly,
              batch_size=args.batch_size,
-             epochs=args.nepochs,
-             std_noise=args.std_noise
-             )
+             epochs=args.nepochs)
 
     # --- Results ----------------------------------------------------------
 
@@ -77,9 +86,6 @@ if __name__ == "__main__":
     torch.save(nn, args.path_out + "/models/" + "trained_model.pt")
 
     learning_curves(os.path.join(args.path_out, "logs.hdf5"), os.path.join(args.path_out, "plots"))
-    """
-    param_estimate = modeling(os.path.join(args.path_data, "keys.hdf5"), os.path.join(args.path_data, "dataset.hdf5"),
-                              args.path_out + "/models/" + "model20.pt", os.path.join(args.path_out, "plots"))
 
-    inference(param_estimate, args.path_data, os.path.join(args.path_NRE, "trained_model.pt"), 
-              os.path.join(args.path_out, "plots"))
+    inference(args.path_data, os.path.join(args.path_out, "/models/trained_model.pt"),
+              args.file_cnn, os.path.join(args.path_out, "plots"))

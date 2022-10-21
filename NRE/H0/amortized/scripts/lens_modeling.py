@@ -33,6 +33,19 @@ def shear_coordinates(gamma, phi):
     return gamma1, gamma2
 
 
+def ellip_polar(e1, e2):
+    x = np.sqrt(e1 ** 2 + e2 ** 2)
+    f = (1 - x) / (1 + x)
+    phi = np.arctan2(e2, e1) / 2
+    return f, phi
+
+
+def shear_polar(gamma1, gamma2):
+    gamma = np.sqrt(gamma1 ** 2 + gamma2 ** 2)
+    phi = np.arctan2(gamma2, gamma1) / 2
+    return gamma, phi
+
+
 def linear(x, a, b):
     return a * x + b
 
@@ -60,6 +73,21 @@ def cart2pol(x, y):
 # SPHERICAL COORDINATES TO CARTESIAN
 def pol2cart(r, theta):
     return r * torch.cos(theta), r * torch.sin(theta)
+
+
+def normalization(x, y):
+    """
+        Normalizes distributions
+        Inputs
+            x : (array) H0 values
+            y : (array) posterior probabilities
+        Outputs
+            y : (array) Norm
+        """
+    norm = np.trapz(y, x, axis=1)
+    y /= norm[:, None]
+
+    return y
 
 
 def gaussian_noise(x, sig_dt=.3):
@@ -120,9 +148,9 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
     f_prime = np.sqrt(1 - f ** 2)
 
     # Image positions in the lens coordinate system
-    im_pos_trans = torch.zeros(x0_lens.shape[0], xim_fov.shape[0], 2, 1)
-    im_pos_trans[:, :, 0, 0] = xim_fov[None, :] - x0_lens[:, None]
-    im_pos_trans[:, :, 1, 0] = yim_fov[None, :] - y0_lens[:, None]
+    im_pos_trans = torch.zeros(xim_fov.shape[0], xim_fov.shape[1], 2, 1)
+    im_pos_trans[:, :, 0, 0] = xim_fov - x0_lens.unsqueeze(1)
+    im_pos_trans[:, :, 1, 0] = yim_fov - y0_lens.unsqueeze(1)
     im_pos_lens = torch.matmul(mtx_rot(-phi), im_pos_trans).squeeze(3)
     xim, yim = im_pos_lens[:, :, 0], im_pos_lens[:, :, 1]
     r_im, phi_im = cart2pol(yim, xim)
@@ -147,11 +175,11 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
 
     # X deflection angle (eq. 27a Kormann et al. 1994)
     def alphax(varphi):
-        return theta_E * np.sqrt(f) / f_prime * torch.arcsin(f_prime * torch.sin(varphi))
+        return theta_E * torch.sqrt(f) / f_prime * torch.arcsin(f_prime * torch.sin(varphi))
 
     # Y deflection angle (eq. 27a Kormann et al. 1994)
     def alphay(varphi):
-        return theta_E * np.sqrt(f) / f_prime * torch.arcsinh(f_prime / f * torch.cos(varphi))
+        return theta_E * torch.sqrt(f) / f_prime * torch.arcsinh(f_prime / f * torch.cos(varphi))
 
     # Lens potential deviation from a SIS (Meneghetti, 19_2018, psi_tilde)
     def psi_tilde(varphi):
@@ -179,7 +207,6 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
     lens_term = lens_pot(phi_im)
     shear_term = shear_pot(xim + xtrans, yim + ytrans)
     fermat_pot = geo_term - lens_term - shear_term
-
     fermat_pot = fermat_pot - torch.amin(fermat_pot, dim=1, keepdim=True)
 
     return fermat_pot
@@ -216,9 +243,11 @@ def split_data(path_in):
     images = dataset["images"][:]
     param = dataset["parameters"][:, :7]
     dataset.close()
+    
+    images = images / np.amax(images, axis=(1,2,3), keepdims=True)
 
     param[:, 2], param[:, 3] = ellip_coordinates(param[:, 2], param[:, 3])
-    param[:, 5], param[:, 6] = shear_coordinates(param[:, 5], abs(param[:, 6]))
+    param[:, 5], param[:, 6] = shear_coordinates(param[:, 5], param[:, 6])
 
     mean = np.mean(param, axis=0)
     std = np.std(param, axis=0)
@@ -242,7 +271,7 @@ def split_data(path_in):
 
 
 def train_fn(model, path_in, path_out, optimizer, loss_fn, acc_fn, threshold, sched=None,
-             grad_clip=None, anomaly_detection=False, batch_size=256, epochs=100, std_noise=.5):
+             grad_clip=None, anomaly_detection=False, batch_size=128, epochs=100, std_noise=.04):
     """
     Manages the training
     Inputs
@@ -434,7 +463,7 @@ def learning_curves(file, path_out):
     plt.savefig(path_out + '/acc.png', bbox_inches='tight')
 
 
-def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4):
+def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4, std_noise=.04):
     """
     Inputs
         file_keys : (str) name of the file containing the keys of the test set
@@ -459,13 +488,16 @@ def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4):
     images = dataset["images"][test_keys]
     param = dataset["parameters"][:, :7]
     dataset.close()
+    
+    images = images / np.amax(images, axis=(1,2,3), keepdims=True)
     param[:, 2], param[:, 3] = ellip_coordinates(param[:, 2], param[:, 3])
     param[:, 5], param[:, 6] = shear_coordinates(param[:, 5], param[:, 6])
     mean = np.mean(param, axis=0)
     std = np.std(param, axis=0)
     truths = param[test_keys]
 
-    x = torch.from_numpy(images).to(device, non_blocking=True).float()
+    x = torch.from_numpy(images) + std_noise * torch.randn(images.shape)
+    x = x.to(device, non_blocking=True).float()
     y = torch.from_numpy(truths).to(device, non_blocking=True).float()
     model = model.to(device, non_blocking=True)
     model.eval()
@@ -531,7 +563,7 @@ def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4):
     return predic
 
 
-def inference(param_pred, file_model, path_out, nrow=5, ncol=4, npts=1000, batch_size=100):
+def inference(param_pred, path_data, file_model, path_out, nrow=5, ncol=4, npts=1000, batch_size=100):
     """
     Computes the NRE posterior, the analytical posterior and performs the coverage diagnostic
     Inputs
@@ -548,12 +580,12 @@ def inference(param_pred, file_model, path_out, nrow=5, ncol=4, npts=1000, batch
         model = torch.load(file_model, map_location="cpu")
 
     # import keys
-    keys = h5py.File(file_keys, 'r')
+    keys = h5py.File(os.path.join(path_data, "keys.hdf5"), 'r')
     test_keys = keys["test"][:]
     keys.close()
 
     # import data
-    dataset = h5py.File(file_data, 'r')
+    dataset = h5py.File(os.path.join(path_data, "dataset.hdf5"), 'r')
     H0_true = dataset["Hubble_cst"][test_keys]
     lower_bound = np.floor(np.min(H0_true))
     higher_bound = np.ceil(np.max(H0_true))
@@ -566,30 +598,33 @@ def inference(param_pred, file_model, path_out, nrow=5, ncol=4, npts=1000, batch
     H0_true = H0_true.flatten()
     test_keys = np.delete(test_keys, idx_out, axis=0)
     time_delays = dataset["time_delays"][test_keys]
-    im_pos = dataset["positions"][test_keys]
+    im_pos = torch.from_numpy(dataset["positions"][test_keys])
     dataset.close()
 
-    param_pred = param_pred[test_keys]
+    param_pred[:, 2], param_pred[:, 3] = ellip_polar(param_pred[:, 2], param_pred[:, 3])
+    param_pred[:, 5], param_pred[:, 6] = shear_polar(param_pred[:, 5], param_pred[:, 6])
+    param_pred = torch.from_numpy(np.delete(param_pred, idx_out, axis=0))
     nsamp = time_delays.shape[0]
     dt = gaussian_noise(torch.from_numpy(time_delays))
     nim = torch.count_nonzero(dt + 1, dim=1)
 
     ind2 = torch.where(nim == 2)
-    pos_doub = torch.from_numpy(im_pos[ind2, :, :-2])
-    param_doub = torch.from_numpy(param_pred[ind2])
+    pos_doub = im_pos[ind2][:, :, :-2]
+    param_doub = param_pred[ind2]
     pot_doub = get_Fermat_potentials(param_doub[:, 0], param_doub[:, 1], param_doub[:, 4],
                                      param_doub[:, 2], param_doub[:, 3], param_doub[:, 5],
                                      param_doub[:, 6], pos_doub[:, 0], pos_doub[:, 1])
-
+    pot_doub = torch.cat((pot_doub, -torch.ones(pot_doub.shape[0], 2)), dim=1)
+    
     ind4 = torch.where(nim == 4)
-    pos_quad = torch.from_numpy(im_pos[ind4])
-    param_quad = torch.from_numpy(param_pred[ind4])
+    pos_quad = im_pos[ind4]
+    param_quad = param_pred[ind4]
     pot_quad = get_Fermat_potentials(param_quad[:, 0], param_quad[:, 1], param_quad[:, 4],
                                      param_quad[:, 2], param_quad[:, 3], param_quad[:, 5],
                                      param_quad[:, 6], pos_quad[:, 0], pos_quad[:, 1])
-
-    pot = -torch.ones((nsamp, 4))
-    pot[ind2, :-2] = pot_doub
+    
+    pot = torch.ones(nsamp, 4)
+    pot[ind2] = pot_doub
     pot[ind4] = pot_quad
 
     data = torch.cat((dt[:, :, None], pot[:, :, None]), dim=2)
@@ -599,6 +634,7 @@ def inference(param_pred, file_model, path_out, nrow=5, ncol=4, npts=1000, batch
     # Global NRE posterior
     support = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     support_tile = np.tile(support, (nsamp, 1))
+    support = support.flatten()
 
     dataset_test = torch.utils.data.TensorDataset(data_repeated, torch.from_numpy(support_tile))
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)

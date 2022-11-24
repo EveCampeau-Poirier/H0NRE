@@ -1,10 +1,9 @@
 # %%
 import h5py
 import os
+import time
 import numpy as np
 import matplotlib.pyplot as plt
-
-plt.style.use(['science', 'bright'])
 
 from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import c
@@ -132,20 +131,34 @@ def dumper(live, dead, logweights, logZ, logZerr):
 
 # ----------------------------------- GLOBAL VARIABLES --------------------------------------
 
-path_out = "results/paper/SetTransformer/inference/"
+path_out = "results/PolyChord/full_prior/"
 
-selected = np.array([20, 42, 33, 34, 43, 36, 13, 32, 10, 5])
-dataset = h5py.File("data_plus/dataset.hdf5", 'r')
+# import keys
 keys = h5py.File("data_plus/keys.hdf5", 'r')
-idx = keys["test"][:]
-dt = dataset["time_delays"][idx][selected]
-pot = dataset["Fermat_potential"][idx][selected]
-im_pos = dataset["positions"][idx][selected]
-z = dataset["redshifts"][idx][selected]
-param = dataset["parameters"][idx][selected]
-H0 = dataset["Hubble_cst"][idx][selected].flatten()
-dataset.close()
+test_keys = keys["test"][:]
 keys.close()
+
+# import data
+dataset = h5py.File("data_plus/dataset.hdf5", 'r')
+H0 = dataset["Hubble_cst"][test_keys]
+lower_bound = np.floor(np.min(H0))
+upper_bound = np.ceil(np.max(H0))
+
+# remove out of bounds data
+selected = np.array([20, 42, 33, 34, 43, 36, 13, 32, 10, 5])
+idx_up = np.where(H0 > 75.)[0]
+idx_down = np.where(H0 < 65.)[0]
+idx_out = np.concatenate((idx_up, idx_down))
+H0 = np.delete(H0, idx_out, axis=0)
+H0 = H0[selected].flatten()
+test_keys = np.delete(test_keys, idx_out, axis=0)
+dt = dataset["time_delays"][test_keys][selected]
+pot = dataset["Fermat_potential"][test_keys][selected]
+z = dataset["redshifts"][test_keys][selected]
+im_pos = dataset["positions"][test_keys][selected]
+param = dataset["parameters"][test_keys][selected]
+dataset.close()
+
 sig_dt = .3
 sig_pot = .003
 
@@ -168,14 +181,13 @@ samples = samples[samples != 0]
 samples = samples.reshape(nsamp, 3, 2)
 
 # observations
-noisy_data = gaussian_noise(torch.from_numpy(samples))
-noisy_data_repeated = torch.repeat_interleave(noisy_data, npts, dim=0)
+samples_repeated = torch.repeat_interleave(torch.from_numpy(samples), npts, dim=0)
 
 # Global NRE posterior
-support = np.linspace(60, 80, npts).reshape(npts, 1)
+support = np.linspace(lower_bound + 1, upper_bound - 1, npts).reshape(npts, 1)
 support_tile = np.tile(support, (nsamp, 1))
 
-dataset_test = torch.utils.data.TensorDataset(noisy_data_repeated, torch.from_numpy(support_tile))
+dataset_test = torch.utils.data.TensorDataset(samples_repeated, torch.from_numpy(support_tile))
 dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=200)
 ratios = []
 for x1, x2 in dataloader:
@@ -189,26 +201,21 @@ ratios = normalization(support_tile, ratios)
 # ----------------------------------- Nested Sampling --------------------------------------
 
 for i in range(nsamp):
+
     xim = im_pos[i, 0][im_pos[i, 0] != -1.]
     yim = im_pos[i, 1][im_pos[i, 1] != -1.]
-    dt_obs = noisy_data[i, 0][noisy_data[i, 0] > 0].detach().cpu().numpy()
-    pot_obs = noisy_data[i, 1][noisy_data[i, 1] > 0].detach().cpu().numpy()
+    dt_obs = dt[i][dt[i] > 0]
+    pot_obs = pot[i][pot[i] > 0]
 
     cosmo_model = FlatLambdaCDM(H0=H0[i], Om0=.3)
     Ds = cosmo_model.angular_diameter_distance(z[i, 1])
     Dd = cosmo_model.angular_diameter_distance(z[i, 0])
     Dds = cosmo_model.angular_diameter_distance_z1z2(z[i, 0], z[i, 1])
-    vdisp = np.sqrt(param[i, 4] / 4 / np.pi / Dds.value * Ds.value / 180 / 3600 * np.pi) * c.value
-    vdisp = (vdisp * u.Mpc / u.d).to('km/s').value
 
-    settings.file_root = 'sample{}'.format(i)
+    settings.file_root = 'full_prior{}'.format(i)
 
-    low = np.array([param[i, 0] - .1, param[i, 1] - .1, param[i, 2] - .1,
-                    param[i, 3] - np.pi / 16, vdisp - 10., 0., param[i, 6] - np.pi / 16,
-                    H0[i] - 5.])
-    high = np.array([param[i, 0] + .1, param[i, 1] + .1, np.minimum(param[i, 2] + .1, .99),
-                     param[i, 3] + np.pi / 16, vdisp + 10., .05, param[i, 6] + np.pi / 16,
-                     H0[i] + 5.])
+    low = np.array([- .3, - .3, .30, - np.pi / 2, .5, 0., - np.pi / 2, H0[i] - 5.])
+    high = np.array([.3, .3, .99, np.pi / 2, 2., 0.05, np.pi / 2, H0[i] + 5.])
 
 
     def prior(hypercube):
@@ -222,13 +229,10 @@ for i in range(nsamp):
         Dd = cosmo_model.angular_diameter_distance(z[i, 0])
         Dds = cosmo_model.angular_diameter_distance_z1z2(z[i, 0], z[i, 1])
 
-        vdisp = (theta[4] * u.km / u.s).to('Mpc/d').value
-        theta_E = 4 * np.pi * (vdisp / c.value) ** 2 * Dds.value / Ds.value * 180 * 3600 / np.pi
-
-        pot = get_Fermat_potentials(theta[0], theta[1], theta[2], theta[3], theta_E,
+        pot = get_Fermat_potentials(theta[0], theta[1], theta[2], theta[3], theta[4],
                                     theta[5], theta[6], xim, yim)
         pot = pot[pot != 0].flatten()
-        dt = get_time_delays(pot, z[0], Dd, Ds, Dds)
+        dt = get_time_delays(pot, z[i, 0], Dd, Ds, Dds)
 
         I = log_gaussian(dt_obs, dt, sig_dt) + log_gaussian(pot_obs, pot, sig_pot)
 
@@ -236,13 +240,15 @@ for i in range(nsamp):
 
 
     lkh = likelihood(
-        np.array([param[i, 0], param[i, 1], param[i, 2], param[i, 3], vdisp, param[i, 5], param[i, 6], H0[i]]))
+        np.array([param[i, 0], param[i, 1], param[i, 2], param[i, 3], param[i, 4], param[i, 5], param[i, 6], H0[i]]))
     print(i, lkh)
 
+    start = time.time()
     output = pypolychord.run_polychord(likelihood, nDims, nDerived, settings, prior, dumper)
+    print(f'Integration completed {((time.time() - start) // 60):.0f}m {((time.time() - start) % 60):.0f}s')
 
     paramnames = [('xlens', r"x_{lens}"), ("ylens", r"y_{lens}"), ("f", r"f"), ("phi", r"\phi"),
-                  ("v", r"v"), ("gammaext", r"\gamma_{ext}"), ("phiext", r"\phi_{ext}"),
+                  ("theta_E", r"\theta_E"), ("gammaext", r"\gamma_{ext}"), ("phiext", r"\phi_{ext}"),
                   ("H0", r"H_{0}")]
     output.make_paramnames_files(paramnames)
 
@@ -250,19 +256,30 @@ for i in range(nsamp):
     g = plots.getSubplotPlotter()
     g.triangle_plot(posterior, filled=True,
                     markers={"xlens": param[i, 0], "ylens": param[i, 1], "f": param[i, 2], "phi": param[i, 3],
-                             "v": vdisp,
+                             "theta_E": param[i, 4],
                              "gammaext": param[i, 5], "phiext": param[i, 6], "H0": H0[i]},
-                    title_limit=1)
+                    title_limit=1,
+                    param_limits={"xlens": [low[0], high[0]], "ylens": [low[1], high[1]], "f": [low[2], high[2]],
+                                  "phi": [low[3], high[3]], "theta_E": [low[4], high[4]], "gammaext": [low[5], high[5]],
+                                  "phiext": [low[6], high[6]], "H0": [low[7], high[7]]})
     g.export(path_out + 'corner_plot{}.pdf'.format(i))
 
     # ----------------------------------- Figure --------------------------------------
 
-    posterior = output.posterior
-    g = plots.get_single_plotter(width_inch=4)
-    g.plot_1d(posterior, 'H0', lims=[60, 80], normalized=True, colors=['C1'], ls=['-.'])
-    g.add_x_marker(H0[i])
-    plt.plot(support.flatten(), ratios[i], '-', color='C4', zorder=0)
-    g.add_legend(['Nested sampling', 'Truth', 'NRE'])
-    plt.ylabel(r"$p(H_0 \mid \Delta t, \Delta \phi)$")
-    plt.xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
-    g.export(path_out + 'posterior{}.pdf'.format(i))
+    plt.style.use(['science', 'vibrant'])
+    g = plots.get_subplot_plotter(width_inch=3, subplot_size_ratio=.776)
+    g.settings.linewidth = 2
+    g.plot_1d(posterior, 'H0', lims=[62, 78], normalized=True, colors=['C1'], ls=['--'])
+    g.add_x_marker(H0[i], ls='dotted', lw=1.5)
+    plt.plot(support.flatten(), ratios[i], '-', color='C4', zorder=0, linewidth=2)
+    if i == 5:
+        g.add_legend(['Nested' + '\n' + 'sampling', 'Truth', 'NRE'])
+    if i in [0, 5]:
+        plt.ylabel(r"$p(H_0 \mid \Delta t, \Delta \phi)$")
+    else:
+        plt.ylabel("")
+    if i <= 4:
+        plt.xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
+    else:
+        plt.xlabel("")
+    g.export(path_out + 'post{}.pdf'.format(i))

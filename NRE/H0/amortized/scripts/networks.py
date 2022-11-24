@@ -190,7 +190,7 @@ class SetTransformer(nn.Module):
         )
         self.dim_hidden = dim_hidden
 
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, x3):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         #x1 shape = (batch size, 3, 2)
@@ -217,7 +217,7 @@ class SetTransformer(nn.Module):
             x[ind4] = quads.squeeze(1)
 
         # Concatening H0
-        x = torch.cat((x, x2), dim=1)
+        x = torch.cat((x, x2, x3), dim=1)
 
         # Decoder
         x = self.dec(x)
@@ -228,7 +228,7 @@ class SetTransformer(nn.Module):
 ###################### CNN ########################
 
 class AccOverFeat96(nn.Module):
-    def __init__(self):
+    def __init__(self, p_drop=0):
         super(AccOverFeat96, self).__init__()
 
         self.conv_layer = nn.Sequential(
@@ -250,27 +250,30 @@ class AccOverFeat96(nn.Module):
             nn.Conv2d(36, 72, kernel_size=3, stride=1, padding=1),  # 11
             nn.BatchNorm2d(72),
             nn.ReLU(),
+            nn.Dropout(p=p_drop),
 
             # Fourth layer
-            nn.Conv2d(72, 72, kernel_size=3, stride=1, padding=1),  # 11
-            nn.BatchNorm2d(72),
-            nn.ReLU(),
+            #nn.Conv2d(72, 72, kernel_size=3, stride=1, padding=1),  # 11
+            #nn.BatchNorm2d(72),
+            #nn.ReLU(),
 
             # Fifth layer
             nn.Conv2d(72, 144, kernel_size=3, stride=1, padding=1),  # 11
             nn.BatchNorm2d(144),
             nn.ReLU(),
+            nn.Dropout(p=p_drop),
 
             # Sixth layer
-            nn.Conv2d(144, 144, kernel_size=3, stride=1, padding=1),  # 11
-            nn.BatchNorm2d(144),
-            nn.ReLU(),
+            #nn.Conv2d(144, 144, kernel_size=3, stride=1, padding=1),  # 11
+            #nn.BatchNorm2d(144),
+            #nn.ReLU(),
             # Pooling
             nn.Conv2d(144, 144, kernel_size=3, stride=2, padding=0)  # 5
         )
         self.lin_layer = nn.Sequential(
             nn.Linear(3600, 3600),
             nn.ReLU(),
+            nn.Dropout(p=p_drop),
             nn.Linear(3600, 7)
         )
 

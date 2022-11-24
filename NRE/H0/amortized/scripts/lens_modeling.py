@@ -57,7 +57,7 @@ def norm(x, y):
 
 # ROTATION MATRIX
 def mtx_rot(phi):
-    mtx = torch.zeros(phi.shape[0], 1, 2, 2)
+    mtx = torch.zeros((phi.shape[0], 1, 2, 2), device=phi.device)
     mtx[:, 0, 0, 0] = torch.cos(phi)
     mtx[:, 0, 0, 1] = -torch.sin(phi)
     mtx[:, 0, 1, 0] = torch.sin(phi)
@@ -67,7 +67,7 @@ def mtx_rot(phi):
 
 # CARTESIAN COORDINATES TO SPHERICAL
 def cart2pol(x, y):
-    return norm(x, y), torch.arctan2(y, x)
+    return norm(x, y), torch.atan2(y, x)
 
 
 # SPHERICAL COORDINATES TO CARTESIAN
@@ -86,6 +86,7 @@ def normalization(x, y):
         """
     norm = np.trapz(y, x, axis=1)
     y /= norm[:, None]
+    sig
 
     return y
 
@@ -148,7 +149,7 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
     f_prime = np.sqrt(1 - f ** 2)
 
     # Image positions in the lens coordinate system
-    im_pos_trans = torch.zeros(xim_fov.shape[0], xim_fov.shape[1], 2, 1)
+    im_pos_trans = torch.zeros((xim_fov.shape[0], xim_fov.shape[1], 2, 1), device=xim_fov.device)
     im_pos_trans[:, :, 0, 0] = xim_fov - x0_lens.unsqueeze(1)
     im_pos_trans[:, :, 1, 0] = yim_fov - y0_lens.unsqueeze(1)
     im_pos_lens = torch.matmul(mtx_rot(-phi), im_pos_trans).squeeze(3)
@@ -156,7 +157,7 @@ def get_Fermat_potentials(x0_lens, y0_lens, theta_E, ellip, phi, gamma_ext, phi_
     r_im, phi_im = cart2pol(yim, xim)
 
     # AGN positions in the lens coordinate system
-    src_pos_trans = torch.zeros(x0_lens.shape[0], 1, 2, 1)
+    src_pos_trans = torch.zeros((x0_lens.shape[0], 1, 2, 1), device=x0_lens.device)
     src_pos_trans[:, 0, 0, 0] = x0_AGN - x0_lens
     src_pos_trans[:, 0, 1, 0] = y0_AGN - y0_lens
     src_pos_lens = torch.matmul(mtx_rot(-phi), src_pos_trans).squeeze(3)
@@ -240,11 +241,11 @@ def split_data(path_in):
     """
     # Reading data
     dataset = h5py.File(os.path.join(path_in, "dataset.hdf5"), 'r')
-    images = dataset["images"][:]
+    images = dataset["hosts"][:]
     param = dataset["parameters"][:, :7]
     dataset.close()
-    
-    images = images / np.amax(images, axis=(1,2,3), keepdims=True)
+
+    images = images / np.amax(images, axis=(1, 2, 3), keepdims=True)
 
     param[:, 2], param[:, 3] = ellip_coordinates(param[:, 2], param[:, 3])
     param[:, 5], param[:, 6] = shear_coordinates(param[:, 5], param[:, 6])
@@ -271,7 +272,7 @@ def split_data(path_in):
 
 
 def train_fn(model, path_in, path_out, optimizer, loss_fn, acc_fn, threshold, sched=None,
-             grad_clip=None, anomaly_detection=False, batch_size=128, epochs=100, std_noise=.04):
+             grad_clip=None, anomaly_detection=False, batch_size=128, epochs=100, std_noise=.1):
     """
     Manages the training
     Inputs
@@ -463,7 +464,7 @@ def learning_curves(file, path_out):
     plt.savefig(path_out + '/acc.png', bbox_inches='tight')
 
 
-def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4, std_noise=.04):
+def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4, std_noise=.1, batch_size=128):
     """
     Inputs
         file_keys : (str) name of the file containing the keys of the test set
@@ -485,29 +486,41 @@ def modeling(file_keys, file_data, file_model, path_out, nrow=2, ncol=4, std_noi
 
     # import data
     dataset = h5py.File(file_data, 'r')
-    images = dataset["images"][test_keys]
+    images = dataset["hosts"][test_keys]
     param = dataset["parameters"][:, :7]
     dataset.close()
-    
-    images = images / np.amax(images, axis=(1,2,3), keepdims=True)
+
+    images = images / np.amax(images, axis=(1, 2, 3), keepdims=True)
     param[:, 2], param[:, 3] = ellip_coordinates(param[:, 2], param[:, 3])
     param[:, 5], param[:, 6] = shear_coordinates(param[:, 5], param[:, 6])
     mean = np.mean(param, axis=0)
     std = np.std(param, axis=0)
     truths = param[test_keys]
 
-    x = torch.from_numpy(images) + std_noise * torch.randn(images.shape)
-    x = x.to(device, non_blocking=True).float()
-    y = torch.from_numpy(truths).to(device, non_blocking=True).float()
+    noisy_images = torch.from_numpy(images) + std_noise * torch.randn(images.shape)
+    targets = torch.from_numpy(truths)
+    dataset_test = torch.utils.data.TensorDataset(noisy_images, targets)
+    dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
+    predic = []
+    accuracy = []
+
     model = model.to(device, non_blocking=True)
     model.eval()
+
     with torch.no_grad():
-        y_hat = model(x)
-    acc = acc_fct(y_hat, y)
-    print('\n Accuracy on test set : ', acc * 100)
+        for x, y in dataloader:
+            x = x.to(device, non_blocking=True).float()
+            y = y.to(device, non_blocking=True).float()
+            y_hat = model(x)
+            acc = acc_fct(y_hat, y)
+            predic.extend(y_hat.detach().cpu().numpy())
+            accuracy.append(acc.detach().cpu().numpy())
+
+    accuracy = np.mean(np.asarray(accuracy))
+    print('\n Accuracy on test set : ', accuracy * 100)
 
     # Conversion en format numpy et redimensionner
-    predic = y_hat.detach().cpu().numpy() * std + mean
+    predic = np.asarray(predic) * std + mean
 
     names = [r"$x_d$", r"$y_d$", r"$e_x$", r"$e_y$",
              r"$\theta_E$", r"$\gamma_x$", r"$\gamma_y$"]
@@ -614,16 +627,16 @@ def inference(param_pred, path_data, file_model, path_out, nrow=5, ncol=4, npts=
     pot_doub = get_Fermat_potentials(param_doub[:, 0], param_doub[:, 1], param_doub[:, 4],
                                      param_doub[:, 2], param_doub[:, 3], param_doub[:, 5],
                                      param_doub[:, 6], pos_doub[:, 0], pos_doub[:, 1])
-    pot_doub = torch.cat((pot_doub, -torch.ones(pot_doub.shape[0], 2)), dim=1)
-    
+    pot_doub = torch.cat((pot_doub, -torch.ones((pot_doub.shape[0], 2), device=pot_doub.device)), dim=1)
+
     ind4 = torch.where(nim == 4)
     pos_quad = im_pos[ind4]
     param_quad = param_pred[ind4]
     pot_quad = get_Fermat_potentials(param_quad[:, 0], param_quad[:, 1], param_quad[:, 4],
                                      param_quad[:, 2], param_quad[:, 3], param_quad[:, 5],
                                      param_quad[:, 6], pos_quad[:, 0], pos_quad[:, 1])
-    
-    pot = torch.ones(nsamp, 4)
+
+    pot = torch.ones((nsamp, 4), device=pot_doub.device)
     pot[ind2] = pot_doub
     pot[ind4] = pot_quad
 
@@ -636,7 +649,8 @@ def inference(param_pred, path_data, file_model, path_out, nrow=5, ncol=4, npts=
     support_tile = np.tile(support, (nsamp, 1))
     support = support.flatten()
 
-    dataset_test = torch.utils.data.TensorDataset(data_repeated, torch.from_numpy(support_tile))
+    dataset_test = torch.utils.data.TensorDataset(data_repeated,
+                                                  torch.from_numpy(support_tile).to(data_repeated.device))
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     ratios = []
     for x1, x2 in dataloader:

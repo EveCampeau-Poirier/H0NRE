@@ -7,7 +7,6 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 # PyTorch libraries
 import torch
 from torch.nn.utils import clip_grad_norm_
@@ -17,13 +16,14 @@ from lens_modeling import ellip_coordinates, shear_coordinates, ellip_polar, she
 from functions import r_estimator, normalization
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-torch.manual_seed(0)
-np.random.seed(0)
+torch.manual_seed(1)
+np.random.seed(1)
+
 
 # --- Functions for training -----------------------------------------------
 
 
-def gaussian_noise(x, sig_dt=.3): ###
+def gaussian_noise(x, sig_dt=.41):  ###
     """
     Adds noise to time delays
     Inputs
@@ -34,15 +34,15 @@ def gaussian_noise(x, sig_dt=.3): ###
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
     mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
-    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1) ###
+    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)  ###
     noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)), device="cpu")
     noisy_data = x.clone()
-    noisy_data[:, :, 0] += noise_dt * mask_pad * mask_zero ###
+    noisy_data[:, :, 0] += noise_dt * mask_pad * mask_zero  ###
 
     return noisy_data
 
 
-def modeling(images, file_cnn, std_noise=.04):
+def modeling(images, file_cnn, std_noise=.1, batch_size=128):
     """
     Inputs
         file_keys : (str) name of the file containing the keys of the test set
@@ -57,14 +57,14 @@ def modeling(images, file_cnn, std_noise=.04):
     else:
         model = torch.load(file_cnn, map_location="cpu")
 
-    noisy_images = torch.from_numpy(images) + std_noise * torch.randn(images.shape)
+    noisy_images = torch.from_numpy(images).to("cpu") + std_noise * torch.randn(images.shape, device="cpu")
     dataset_test = torch.utils.data.TensorDataset(noisy_images)
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     preds = []
     model = model.to(device, non_blocking=True)
     model.eval()
     for x in dataloader:
-        x = x.to(device, non_blocking=True).float()
+        x = x[0].to(device, non_blocking=True).float()
         with torch.no_grad():
             y_hat = model(x)
         preds.extend(y_hat.detach().cpu().numpy())
@@ -89,7 +89,9 @@ def split_data(path_data, file_cnn):
     dataset = h5py.File(os.path.join(path_data, "dataset.hdf5"), 'r')
     dt = torch.from_numpy(dataset["time_delays"][:])
     H0 = torch.from_numpy(dataset["Hubble_cst"][:])
-    images = dataset["images"][:]
+    z = torch.from_numpy(dataset["redshifts"][:])
+    images = dataset["hosts"][:]
+    im_pos = torch.from_numpy(dataset["positions"][:])
     param = dataset["parameters"][:, :7]
     dataset.close()
 
@@ -112,7 +114,7 @@ def split_data(path_data, file_cnn):
     pot_doub = get_Fermat_potentials(param_doub[:, 0], param_doub[:, 1], param_doub[:, 4],
                                      param_doub[:, 2], param_doub[:, 3], param_doub[:, 5],
                                      param_doub[:, 6], pos_doub[:, 0], pos_doub[:, 1])
-    pot_doub = torch.cat((pot_doub, -torch.ones(pot_doub.shape[0], 2)), dim=1)
+    pot_doub = torch.cat((pot_doub, -torch.ones((pot_doub.shape[0], 2), device=pot_doub.device)), dim=1)
 
     ind4 = torch.where(nim == 4)
     pos_quad = im_pos[ind4]
@@ -121,11 +123,11 @@ def split_data(path_data, file_cnn):
                                      param_quad[:, 2], param_quad[:, 3], param_quad[:, 5],
                                      param_quad[:, 6], pos_quad[:, 0], pos_quad[:, 1])
 
-    pot = torch.ones(nsamp, 4)
+    pot = torch.ones((nsamp, 4), device=pot_doub.device)
     pot[ind2] = pot_doub
     pot[ind4] = pot_quad
 
-    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
+    samples = torch.cat((dt[:, :, None], pot[:, :, None]), dim=2)
     samples = samples[samples != 0].reshape(nsamp, 3, 2)
 
     # import keys
@@ -134,12 +136,12 @@ def split_data(path_data, file_cnn):
     valid_keys = keys["valid"][:]
     keys.close()
 
-    x1_train, x2_train = samples[train_keys], H0[train_keys]
-    x1_valid, x2_valid = samples[valid_keys], H0[valid_keys]
+    x1_train, x2_train, x3_train = samples[train_keys], H0[train_keys], z[train_keys]
+    x1_valid, x2_valid, x3_valid = samples[valid_keys], H0[valid_keys], z[valid_keys]
 
     # Outputs
-    train_set = [x1_train, x2_train]
-    valid_set = [x1_valid, x2_valid]
+    train_set = [x1_train, x2_train, x3_train]
+    valid_set = [x1_valid, x2_valid, x3_valid]
 
     return train_set, valid_set
 
@@ -168,39 +170,39 @@ def train_fn(model, file_cnn, path_data, path_out, optimizer, loss_fn, acc_fn, t
     # model and loss function on GPU
     model = model.to(device, non_blocking=True)
     loss_fn = loss_fn.to(device, non_blocking=True)
-    
+
     # Datasets
     train_set, valid_set = split_data(path_data, file_cnn)
-    x1_train, x2_train = train_set
-    x1_val, x2_val = valid_set
-    
-    dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train)
-    dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val)
-    
+    x1_train, x2_train, x3_train = train_set
+    x1_val, x2_val, x3_val = valid_set
+
+    dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train, x3_train)
+    dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val, x3_val)
+
     # File to save logs
-    if os.path.isfile(path_out+'/logs.hdf5'):
-        os.remove(path_out+'/logs.hdf5')
-    save_file = h5py.File(path_out+'/logs.hdf5','a')
-    
+    if os.path.isfile(path_out + '/logs.hdf5'):
+        os.remove(path_out + '/logs.hdf5')
+    save_file = h5py.File(path_out + '/logs.hdf5', 'a')
+
     trng = save_file.create_group("training")
     train_loss = trng.create_dataset("loss", (epochs, 1), dtype='f')
     train_acc = trng.create_dataset("accuracy", (epochs, 1), dtype='f')
-    
+
     vldt = save_file.create_group("validation")
     valid_loss = vldt.create_dataset("loss", (epochs, 1), dtype='f')
     valid_acc = vldt.create_dataset("accuracy", (epochs, 1), dtype='f')
-    
+
     # starting timer
     start = time.time()
-    
+
     # loop on epochs
     for epoch in range(epochs):
-        
+
         # Printing current epoch
         print('\n')
         print(f'Epoch {epoch + 1}/{epochs}')
         print('-' * 10)
-        
+
         # loop on validation and training phases
         for phase in ['valid', 'train']:
             if phase == 'train':
@@ -209,96 +211,101 @@ def train_fn(model, file_cnn, path_data, path_out, optimizer, loss_fn, acc_fn, t
             else:
                 model.train(False)  # evaluation
                 dataloader = torch.utils.data.DataLoader(dataset_valid, batch_size=batch_size)
-                
+
             # Initialization of cumulative loss on batches
             running_loss = 0.0
             # Initialization of cumulative accuracy on batches
             running_acc = 0.0
-            
-            step = 0   # step initialization (batch number)
+
+            step = 0  # step initialization (batch number)
             # loop on batches
-            for x1, x2 in dataloader:
+            for x1, x2, x3 in dataloader:
                 half_batch_size = int(x1.shape[0] / 2)
-                
+
                 x1 = gaussian_noise(x1)
                 x1 = x1.to(device, non_blocking=True).float()
                 x1a = x1[:half_batch_size]
                 x1b = x1[half_batch_size:]
-                
+
                 x2 = x2.to(device, non_blocking=True).float()
                 x2a = x2[:half_batch_size]
                 x2b = x2[half_batch_size:]
-                
+
+                x3 = x3.to(device, non_blocking=True).float()
+                x3a = x3[:half_batch_size]
+                x3b = x3[half_batch_size:]
+
                 y_dep = torch.ones((half_batch_size)).to(device, non_blocking=True).long()
                 y_ind = torch.zeros((half_batch_size)).to(device, non_blocking=True).long()
-                
+
                 # training phase
                 if phase == 'train':
                     # Forward pass
                     for param in model.parameters():
                         param.grad = None
-                    
+
                     if anomaly_detection:
                         with autograd.detect_anomaly():
-                            y_hat_a_dep = model(x1a, x2a)
-                            y_hat_a_ind = model(x1a, x2b)
+                            y_hat_a_dep = model(x1a, x2a, x3a)
+                            y_hat_a_ind = model(x1a, x2b, x3a)
                             loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-                            y_hat_b_dep = model(x1b, x2b)
-                            y_hat_b_ind = model(x1b, x2a)
+                            y_hat_b_dep = model(x1b, x2b, x3b)
+                            y_hat_b_ind = model(x1b, x2a, x3b)
                             loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                             loss = loss_a + loss_b
                     else:
-                        y_hat_a_dep = model(x1a, x2a)
-                        y_hat_a_ind = model(x1a, x2b)
+                        y_hat_a_dep = model(x1a, x2a, x3a)
+                        y_hat_a_ind = model(x1a, x2b, x3a)
                         loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-                        y_hat_b_dep = model(x1b, x2b)
-                        y_hat_b_ind = model(x1b, x2a)
+                        y_hat_b_dep = model(x1b, x2b, x3b)
+                        y_hat_b_ind = model(x1b, x2a, x3b)
                         loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                         loss = loss_a + loss_b
-                    
+
                     # Backward Pass
                     loss.backward()
-                    
+
                     if grad_clip is not None:
                         clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-                        
+
                     optimizer.step()
-                    
+
                 # validation phase
                 else:
                     with torch.no_grad():
-                        y_hat_a_dep = model(x1a, x2a)
-                        y_hat_a_ind = model(x1a, x2b)
+                        y_hat_a_dep = model(x1a, x2a, x3a)
+                        y_hat_a_ind = model(x1a, x2b, x3a)
                         loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-                        y_hat_b_dep = model(x1b, x2b)
-                        y_hat_b_ind = model(x1b, x2a)
+                        y_hat_b_dep = model(x1b, x2b, x3b)
+                        y_hat_b_ind = model(x1b, x2a, x3b)
                         loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                         loss = loss_a + loss_b
-                
+
                 # accuracy evaluation
                 acc_a_dep = acc_fn(y_hat_a_dep, y_dep)
                 acc_a_ind = acc_fn(y_hat_a_ind, y_ind)
                 acc_b_dep = acc_fn(y_hat_b_dep, y_dep)
                 acc_b_ind = acc_fn(y_hat_b_ind, y_ind)
                 acc = (acc_a_dep + acc_a_ind + acc_b_dep + acc_b_ind) / 4
-                
+
                 # update cumulative values
                 running_acc += acc * dataloader.batch_size
                 running_loss += loss * dataloader.batch_size
-                
+
                 # print current information
-                if step % int(len(dataloader.dataset)/batch_size/20) == 0: #
-                    print(f'Current {phase} step {step} ==>  Loss: {float(loss):.4e} // Acc: {float(acc):.4e} // AllocMem (Gb): {torch.cuda.memory_reserved(0)*1e-9}') 
-                
+                if step % int(len(dataloader.dataset) / batch_size / 20) == 0:  #
+                    print(
+                        f'Current {phase} step {step} ==>  Loss: {float(loss):.4e} // Acc: {float(acc):.4e} // AllocMem (Gb): {torch.cuda.memory_reserved(0) * 1e-9}')
+
                 step += 1
-                
+
             # mean of loss and accuracy on epoch
             epoch_loss = running_loss / len(dataloader.dataset)
             epoch_acc = running_acc / len(dataloader.dataset)
 
             # print means
             print(f'{phase} Loss: {float(epoch_loss):.4e} // Acc: {float(epoch_acc):.4e}')
-            
+
             # append means to lists
             if phase == 'train':
                 train_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
@@ -310,12 +317,12 @@ def train_fn(model, file_cnn, path_data, path_out, optimizer, loss_fn, acc_fn, t
                 valid_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
 
         # Keeping track of the model
-        if epoch % int(epochs/10) == 0:
-            torch.save(model, path_out+f'/models/model{epoch:02d}.pt')
-    
+        if epoch % int(epochs / 10) == 0:
+            torch.save(model, path_out + f'/models/model{epoch:02d}.pt')
+
     # Closing file
     save_file.close()
-    
+
     # print training time
     time_elapsed = time.time() - start
     print(f'Training completed in {(time_elapsed // 60):.0f}m {(time_elapsed % 60):.0f}s')
@@ -356,8 +363,9 @@ def inference(path_data, file_model, file_cnn, path_out, nrow=5, ncol=4, npts=10
     H0_true = H0_true.flatten()
     test_keys = np.delete(test_keys, idx_out, axis=0)
     time_delays = dataset["time_delays"][test_keys]
+    z = dataset["redshifts"][test_keys]
     param = dataset["parameters"][:, :7]
-    images = dataset["images"][test_keys]
+    images = dataset["hosts"][:]
     im_pos = torch.from_numpy(dataset["positions"][test_keys])
     dataset.close()
 
@@ -382,7 +390,7 @@ def inference(path_data, file_model, file_cnn, path_out, nrow=5, ncol=4, npts=10
     pot_doub = get_Fermat_potentials(param_doub[:, 0], param_doub[:, 1], param_doub[:, 4],
                                      param_doub[:, 2], param_doub[:, 3], param_doub[:, 5],
                                      param_doub[:, 6], pos_doub[:, 0], pos_doub[:, 1])
-    pot_doub = torch.cat((pot_doub, -torch.ones(pot_doub.shape[0], 2)), dim=1)
+    pot_doub = torch.cat((pot_doub, -torch.ones((pot_doub.shape[0], 2), device=pot_doub.device)), dim=1)
 
     ind4 = torch.where(nim == 4)
     pos_quad = im_pos[ind4]
@@ -391,7 +399,7 @@ def inference(path_data, file_model, file_cnn, path_out, nrow=5, ncol=4, npts=10
                                      param_quad[:, 2], param_quad[:, 3], param_quad[:, 5],
                                      param_quad[:, 6], pos_quad[:, 0], pos_quad[:, 1])
 
-    pot = torch.ones(nsamp, 4)
+    pot = torch.ones((nsamp, 4), device=pot_doub.device)
     pot[ind2] = pot_doub
     pot[ind4] = pot_quad
 
@@ -399,17 +407,18 @@ def inference(path_data, file_model, file_cnn, path_out, nrow=5, ncol=4, npts=10
     data = gaussian_noise(data)
     data = data[data != 0].reshape(nsamp, 3, 2)
     data_repeated = torch.repeat_interleave(data, npts, dim=0)
+    z_repeated = torch.repeat_interleave(torch.from_numpy(z), npts, dim=0)
 
     # Global NRE posterior
     support = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     support_tile = np.tile(support, (nsamp, 1))
     support = support.flatten()
 
-    dataset_test = torch.utils.data.TensorDataset(data_repeated, torch.from_numpy(support_tile))
+    dataset_test = torch.utils.data.TensorDataset(data_repeated, torch.from_numpy(support_tile), z_repeated)
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     ratios = []
-    for x1, x2 in dataloader:
-        preds = r_estimator(model, x1, x2)
+    for x1, x2, x3 in dataloader:
+        preds = r_estimator(model, x1, x2, x3)
         ratios.extend(preds)
 
     ratios = np.asarray(ratios).reshape(nsamp, npts)

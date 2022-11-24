@@ -238,8 +238,8 @@ class training_set(object):
 
         # Parameters
         gamma_ext, phi_ext = param[5:7]
-        gamma1 = gamma_ext * np.cos(phi_ext) # Missing factor 2?
-        gamma2 = gamma_ext * np.sin(phi_ext) # Missing factor 2?
+        gamma1 = gamma_ext * np.cos(phi_ext)
+        gamma2 = gamma_ext * np.sin(phi_ext)
         # Shear matrix
         ext_shear = np.array([[gamma1, gamma2],
                               [gamma2, -gamma1]])
@@ -394,6 +394,9 @@ class training_set(object):
             x = radial(varphi)
             return xsrc - x * np.sin(varphi) + alphax(varphi) + gamma1 * (x * np.sin(varphi) + xtrans) + gamma2 * (
                         x * np.cos(varphi) + ytrans)
+
+        def roots_func(varphi):
+            return [y_lens_eq(varphi), x_lens_eq(varphi)]
 
         # Root function evaluated on its whole domain
         varphi = np.linspace(0, 2 * np.pi, 1000)
@@ -593,7 +596,7 @@ class training_set(object):
     def get_time_delays(self, cosmo, image_caract):
         """Time delays between AGN images"""
         # Parameters
-        zs, zd, Ds, Dd, Dds, vdisp, H0 = cosmo
+        zs, zd, Ds, Dd, Dds, H0 = cosmo
         xim, yim, magn, fermat_pot = image_caract
 
         # Time delays
@@ -674,6 +677,7 @@ class training_set(object):
         if save:
             file = h5py.File(self.path + 'dataset.hdf5', 'a')
             set_im = file.create_dataset("images", (self.nsamp, 1, self.npix, self.npix), dtype='f')
+            set_host = file.create_dataset("hosts", (self.nsamp, 1, self.npix, self.npix), dtype='f')
             set_param = file.create_dataset("parameters", (self.nsamp, 14), dtype='f')
             set_shft = file.create_dataset("redshifts", (self.nsamp, 2), dtype='f')
             set_dt = file.create_dataset("time_delays", (self.nsamp, 4), dtype='f')
@@ -698,38 +702,33 @@ class training_set(object):
 
             ### Einstein radius
             # Source redshift
-            zs = 1.5  # np.random.uniform(1.,4.) # 1.,3.
+            zs = np.random.uniform(1., 3.) # 1.,3.
             # Lens redshift
-            zd = .5  # np.random.uniform(.04,1.) # .04,.5
+            zd = np.random.uniform(.04, .5) # .04,.5
             # Source-observer angular diameter (Mpc)
             Ds = cosmo_model.angular_diameter_distance(zs)
             # Lens-observer angular diameter (Mpc)
             Dd = cosmo_model.angular_diameter_distance(zd)
             # Source-lens angular diameter (Mpc)
             Dds = cosmo_model.angular_diameter_distance_z1z2(zd, zs)
-            # Velocity dispersion (Mpc/day)
-            vdisp = (np.random.uniform(225., 275.) * u.km / u.s).to('Mpc/d')  # 150,300 ou fixe 300
-            # Einstein radius (arcsec) eq. (3.17) of Bartelmann Scheneider
-            theta_E = 4 * np.pi * (vdisp / c) ** 2 * Dds / Ds * 180 * 3600 / np.pi
-            if theta_E < .5 or theta_E > 2.:  # .4 or 2.5
-                print('Einstein radius out of bounds : {}'.format(theta_E))
-                continue
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = np.random.uniform(-.3,.3)  # -.05
+            x0_lens = np.random.uniform(-.3, .3)  # -.05
             # Lens y coordinate (arcsec)
-            y0_lens = np.random.uniform(-.3,.3)  # .02
+            y0_lens = np.random.uniform(-.3, .3)  # .02
             # Lens ellipticity
             ellip = np.random.uniform(.3, .99)  # .7
             # Lens inclination (rad)
-            phi = np.random.uniform(-np.pi/2,np.pi/2)  # np.pi / 3
+            phi = np.random.uniform(-np.pi/2, np.pi/2)  # np.pi / 3
+            # Einstein radius (arcsec)
+            theta_E = np.random.uniform(.5, 2.)
 
             ### External shear
             # External shear amplitude
-            gamma_ext = np.random.uniform(0.,.05)  # .03
+            gamma_ext = np.random.uniform(0., .2)  # .05
             # External shear angle (rad)
-            phi_ext = np.random.uniform(-np.pi/2,np.pi/2)  # np.pi / 4
+            phi_ext = np.random.uniform(-np.pi/2, np.pi/2)  # np.pi / 4
 
             ### Gaussian host galaxy
             # Host galaxy magnitude (AB system)
@@ -762,7 +761,7 @@ class training_set(object):
                               m_AGN, x0_AGN, y0_AGN])
 
             cosmo = np.array([zs, zd, Ds.value, Dd.value,
-                              Dds.value, vdisp.value, H0])
+                              Dds.value, H0])
 
             # There must be two or four AGN images
             xim, yim, magn, fermat_pot = self.AGN_images(param)
@@ -834,10 +833,11 @@ class training_set(object):
             # Saving
             if save:
                 set_im[it, :] = im.reshape(1, self.npix, self.npix)
+                set_host[it, :] = im_psf.reshape(1, self.npix, self.npix)
                 set_param[it, :] = param
                 set_shft[it, :] = np.array([zd, zs])
                 if len(fermat_pot) == 2:
-                    pad = -np.ones(2)
+                    pad = -np.ones((2))
                     fermat_pot = np.concatenate((fermat_pot - np.min(fermat_pot), pad), axis=None)
                     xim = np.concatenate((xim, pad), axis=None)
                     yim = np.concatenate((yim, pad), axis=None)

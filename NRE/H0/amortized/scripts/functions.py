@@ -7,20 +7,25 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
+plt.style.use(['science', 'bright'])
+
 from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import c
+
 c = c.to('Mpc/d')  # Speed of light
 
 # PyTorch libraries
 import torch
 from torch.nn.utils import clip_grad_norm_
 from torch import autograd
-#from torchquad import Simpson, set_up_backend
-#if torch.cuda.is_available():
-#    set_up_backend("torch")
+from torchquad import Simpson, set_up_backend
+
+if torch.cuda.is_available():
+    set_up_backend("torch")
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 torch.manual_seed(0)
 np.random.seed(0)
+
 
 # --- Functions for training -----------------------------------------------
 
@@ -35,27 +40,26 @@ def acc_fct(y_hat, y):
     """
     pred = torch.argmax(y_hat, axis=1)
     acc = torch.mean((y == pred).float())
-    
+
     return acc
 
 
-def gaussian_noise(x, sig_dt=.3, sig_pot=.003): ###
+def gaussian_noise(x, sig_dt=.3, sig_pot=.003):  ###
     """
     Adds noise to time delays
     Inputs
-        x : (tensor)[batch_size x 4 x 2] Time delays and Fermat potentials
         sig_dt : (float) noise standard deviation on time delays
         sig_pot : (float) noise standard deviation on potentials
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
     mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
-    #mask_zero = torch.where(x[:, :, 0] == 0, 0, 1) ###
+    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)
     noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)), device="cpu")
-    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)), device="cpu") ###
+    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)), device="cpu")
     noisy_data = x.clone()
-    noisy_data[:, :, 0] += noise_dt * mask_pad #* mask_zero ###
-    noisy_data[:, :, 1] += noise_pot * mask_pad ###
+    noisy_data[:, :, 0] += noise_dt * mask_pad * mask_zero
+    noisy_data[:, :, 1] += noise_pot * mask_pad * mask_zero
 
     return noisy_data
 
@@ -118,27 +122,21 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
         size = np.count_nonzero(time_delays[i] + 1.)
         dt = time_delays[i][time_delays[i] != -1].reshape(size)
         pot = fermat_pot[i][fermat_pot[i] != -1].reshape(size)
-        
+
         dt = torch.from_numpy(dt).to(device)
         pot = torch.from_numpy(pot).to(device)
 
         if size == 1:
-            limit_dt = [dt - 3 * sig_dt, dt + 3 * sig_dt]
-            limit_dphi = [pot - 3 * sig_pot, pot + 3 * sig_pot]
+            limit = [pot - 3 * sig_pot, pot + 3 * sig_pot]
 
         if size == 3:
-            limit_dt1 = [dt[0] - 3 * sig_dt, dt[0] + 3 * sig_dt]
-            limit_dt2 = [dt[1] - 3 * sig_dt, dt[1] + 3 * sig_dt]
-            limit_dt3 = [dt[2] - 3 * sig_dt, dt[2] + 3 * sig_dt]
-            limit_dphi1 = [pot[0] - 3 * sig_pot, pot[0] + 3 * sig_pot]
-            limit_dphi2 = [pot[1] - 3 * sig_pot, pot[1] + 3 * sig_pot]
-            limit_dphi3 = [pot[2] - 3 * sig_pot, pot[2] + 3 * sig_pot]
+            limit1 = [pot[0] - 3 * sig_pot, pot[0] + 3 * sig_pot]
+            limit2 = [pot[1] - 3 * sig_pot, pot[1] + 3 * sig_pot]
+            limit3 = [pot[2] - 3 * sig_pot, pot[2] + 3 * sig_pot]
 
         for j in range(npts):
-            
-            
+
             if size == 1:
-                
                 def integrand(x):
                     """
                     Function to integrate to estimate the posterior distribution
@@ -147,18 +145,16 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
                     Outputs
                         I : (float) Evaluation of the integrand
                     """
-                    I = gaussian(x[:,0], time_delays_eq(x[:,1], H0[j], zs[i], zd[i]), sig_dt) * \
-                        gaussian(x[:,0], dt, sig_dt) * gaussian(x[:,1], pot, sig_pot)
+                    I = gaussian(dt, time_delays_eq(x[:, 0], H0[j], zs[i], zd[i]), sig_dt) * \
+                        gaussian(pot, x[:, 0], sig_pot)
 
                     return I
-                
-                I = simp.integrate(integrand, dim=2, N=10000, 
-                                   integration_domain=[limit_dt, limit_dphi])
+
+                I = simp.integrate(integrand, dim=1, N=10000,
+                                   integration_domain=[limit])
                 post[i, j] = I
 
-                
             if size == 3:
-                
                 def integrand(x):
                     """
                     Function to integrate to estimate the posterior distribution
@@ -168,18 +164,18 @@ def analytical_posterior(time_delays, fermat_pot, H0, zs, zd, sig_dt=.3, sig_pot
                         I : (float) Evaluation of the integrand
                     """
 
-                    I1 = gaussian(x[:,0], time_delays_eq(x[:,1], H0[j], zs[i], zd[i]), sig_dt) * \
-                         gaussian(x[:,0], dt[0], sig_dt) * gaussian(x[:,1], pot[0], sig_pot)
-                    I2 = gaussian(x[:,2], time_delays_eq(x[:,3], H0[j], zs[i], zd[i]), sig_dt) * \
-                         gaussian(x[:,2], dt[1], sig_dt) * gaussian(x[:,3], pot[1], sig_pot)
-                    I3 = gaussian(x[:,4], time_delays_eq(x[:,5], H0[j], zs[i], zd[i]), sig_dt) * \
-                         gaussian(x[:,4], dt[2], sig_dt) * gaussian(x[:,5], pot[2], sig_pot)
+                    I1 = gaussian(dt[0], time_delays_eq(x[:, 0], H0[j], zs[i], zd[i]), sig_dt) * \
+                         gaussian(pot[0], x[:, 0], sig_pot)
+                    I2 = gaussian(dt[1], time_delays_eq(x[:, 1], H0[j], zs[i], zd[i]), sig_dt) * \
+                         gaussian(pot[1], x[:, 1], sig_pot)
+                    I3 = gaussian(dt[2], time_delays_eq(x[:, 2], H0[j], zs[i], zd[i]), sig_dt) * \
+                         gaussian(pot[2], x[:, 2], sig_pot)
                     I = I1 * I2 * I3
 
                     return I
-                
-                I = simp.integrate(integrand, dim=6, N=10000, 
-                                   integration_domain=[limit_dt1, limit_dphi1, limit_dt2, limit_dphi2, limit_dt3, limit_dphi3])
+
+                I = simp.integrate(integrand, dim=3, N=10000,
+                                   integration_domain=[limit1, limit2, limit3])
                 post[i, j] = I
 
     return post.detach().cpu().numpy()
@@ -195,7 +191,7 @@ def log_trick(logp):
     """
     max = np.amax(logp)
     ind_max = np.argmax(logp)
-    logp = np.delete(logp,ind_max)
+    logp = np.delete(logp, ind_max)
     trick = max + np.log(1 + np.sum(np.exp(logp - max)))
 
     return trick
@@ -222,12 +218,12 @@ def r_estimator(model, x1, x2):
 
     x1.detach()
     x2.detach()
-    
+
     sm = torch.nn.Softmax(dim=1)
     prob = sm(output)
     s = prob[:, 1].detach().cpu().numpy()
     lr = s / (1 - s)
-    
+
     return lr
 
 
@@ -263,7 +259,7 @@ def split_data(file, path_in):
     pot = dataset["Fermat_potential"][:]
     H0 = dataset["Hubble_cst"][:]
     dataset.close()
-    
+
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
     nsamp = samples.shape[0]
     samples = samples[samples != 0]
@@ -321,39 +317,39 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
     # model and loss function on GPU
     model = model.to(device, non_blocking=True)
     loss_fn = loss_fn.to(device, non_blocking=True)
-    
+
     # Datasets
     train_set, valid_set = split_data(file, path_in)
     x1_train, x2_train = train_set
     x1_val, x2_val = valid_set
-    
+
     dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train)
     dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val)
-    
+
     # File to save logs
-    if os.path.isfile(path_out+'/logs.hdf5'):
-        os.remove(path_out+'/logs.hdf5')
-    save_file = h5py.File(path_out+'/logs.hdf5','a')
-    
+    if os.path.isfile(path_out + '/logs.hdf5'):
+        os.remove(path_out + '/logs.hdf5')
+    save_file = h5py.File(path_out + '/logs.hdf5', 'a')
+
     trng = save_file.create_group("training")
     train_loss = trng.create_dataset("loss", (epochs, 1), dtype='f')
     train_acc = trng.create_dataset("accuracy", (epochs, 1), dtype='f')
-    
+
     vldt = save_file.create_group("validation")
     valid_loss = vldt.create_dataset("loss", (epochs, 1), dtype='f')
     valid_acc = vldt.create_dataset("accuracy", (epochs, 1), dtype='f')
-    
+
     # starting timer
     start = time.time()
-    
+
     # loop on epochs
     for epoch in range(epochs):
-        
+
         # Printing current epoch
         print('\n')
         print(f'Epoch {epoch + 1}/{epochs}')
         print('-' * 10)
-        
+
         # loop on validation and training phases
         for phase in ['valid', 'train']:
             if phase == 'train':
@@ -362,35 +358,35 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
             else:
                 model.train(False)  # evaluation
                 dataloader = torch.utils.data.DataLoader(dataset_valid, batch_size=batch_size)
-                
+
             # Initialization of cumulative loss on batches
             running_loss = 0.0
             # Initialization of cumulative accuracy on batches
             running_acc = 0.0
-            
-            step = 0   # step initialization (batch number)
+
+            step = 0  # step initialization (batch number)
             # loop on batches
             for x1, x2 in dataloader:
                 half_batch_size = int(x1.shape[0] / 2)
-                
+
                 x1 = gaussian_noise(x1)
                 x1 = x1.to(device, non_blocking=True).float()
                 x1a = x1[:half_batch_size]
                 x1b = x1[half_batch_size:]
-                
+
                 x2 = x2.to(device, non_blocking=True).float()
                 x2a = x2[:half_batch_size]
                 x2b = x2[half_batch_size:]
-                
+
                 y_dep = torch.ones((half_batch_size)).to(device, non_blocking=True).long()
                 y_ind = torch.zeros((half_batch_size)).to(device, non_blocking=True).long()
-                
+
                 # training phase
                 if phase == 'train':
                     # Forward pass
                     for param in model.parameters():
                         param.grad = None
-                    
+
                     if anomaly_detection:
                         with autograd.detect_anomaly():
                             y_hat_a_dep = model(x1a, x2a)
@@ -408,15 +404,15 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                         y_hat_b_ind = model(x1b, x2a)
                         loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                         loss = loss_a + loss_b
-                    
+
                     # Backward Pass
                     loss.backward()
-                    
+
                     if grad_clip is not None:
                         clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-                        
+
                     optimizer.step()
-                    
+
                 # validation phase
                 else:
                     with torch.no_grad():
@@ -427,31 +423,32 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                         y_hat_b_ind = model(x1b, x2a)
                         loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                         loss = loss_a + loss_b
-                
+
                 # accuracy evaluation
                 acc_a_dep = acc_fn(y_hat_a_dep, y_dep)
                 acc_a_ind = acc_fn(y_hat_a_ind, y_ind)
                 acc_b_dep = acc_fn(y_hat_b_dep, y_dep)
                 acc_b_ind = acc_fn(y_hat_b_ind, y_ind)
                 acc = (acc_a_dep + acc_a_ind + acc_b_dep + acc_b_ind) / 4
-                
+
                 # update cumulative values
-                running_acc += acc*dataloader.batch_size
-                running_loss += loss*dataloader.batch_size
-                
+                running_acc += acc * dataloader.batch_size
+                running_loss += loss * dataloader.batch_size
+
                 # print current information
-                if step % int(len(dataloader.dataset)/batch_size/20) == 0: #
-                    print(f'Current {phase} step {step} ==>  Loss: {float(loss):.4e} // Acc: {float(acc):.4e} // AllocMem (Gb): {torch.cuda.memory_reserved(0)*1e-9}') 
-                
+                if step % int(len(dataloader.dataset) / batch_size / 20) == 0:  #
+                    print(
+                        f'Current {phase} step {step} ==>  Loss: {float(loss):.4e} // Acc: {float(acc):.4e} // AllocMem (Gb): {torch.cuda.memory_reserved(0) * 1e-9}')
+
                 step += 1
-                
+
             # mean of loss and accuracy on epoch
             epoch_loss = running_loss / len(dataloader.dataset)
             epoch_acc = running_acc / len(dataloader.dataset)
 
             # print means
             print(f'{phase} Loss: {float(epoch_loss):.4e} // Acc: {float(epoch_acc):.4e}')
-            
+
             # append means to lists
             if phase == 'train':
                 train_loss[epoch, :] = epoch_loss.detach().cpu().numpy()
@@ -463,16 +460,15 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                 valid_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
 
         # Keeping track of the model
-        if epoch % int(epochs/10) == 0:
-            torch.save(model, path_out+f'/models/model{epoch:02d}.pt')
-    
+        if epoch % int(epochs / 10) == 0:
+            torch.save(model, path_out + f'/models/model{epoch:02d}.pt')
+
     # Closing file
     save_file.close()
-    
+
     # print training time
     time_elapsed = time.time() - start
     print(f'Training completed in {(time_elapsed // 60):.0f}m {(time_elapsed % 60):.0f}s')
-
 
 
 # --- plots ----------------------------------------------
@@ -517,8 +513,8 @@ def learning_curves(file, path_out):
     plt.legend()
     plt.savefig(path_out + '/acc.png', bbox_inches='tight')
 
-    
-def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5000, batch_size=100):
+
+def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=5000, batch_size=128):
     """
     Computes the NRE posterior, the analytical posterior and performs the coverage diagnostic
     Inputs
@@ -529,6 +525,9 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5
     Outputs
         None
     """
+
+    nplots = int(nrow * ncol)
+
     if torch.cuda.is_available():
         model = torch.load(file_model)
     else:
@@ -559,7 +558,6 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5
 
     # reshape data
     samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    samples = samples[:1000]
     nsamp = samples.shape[0]
     samples = samples[samples != 0]
     samples = samples.reshape(nsamp, 3, 2)
@@ -589,18 +587,18 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5
 
     # analytical posterior
     support = support.flatten()
-    analytic = analytical_posterior(noisy_data[:, :, 0].numpy(), noisy_data[:, :, 1].numpy(), support, z[:, 1], z[:, 0])
-    analytic = normalization(support, analytic)
+    # analytic = analytical_posterior(noisy_data[:nplots, :, 0].numpy(), noisy_data[:nplots, :, 1].numpy(), support, z[:nplots, 1], z[:nplots, 0])
+    # analytic = normalization(support, analytic)
 
     it = 0
-    fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=False, figsize=(3 * ncol, 3 * nrow))
+    fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=True, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            axes[i, j].plot(support, analytic[it], '--g', label='{:.2f}'.format(support[np.argmax(analytic[it])]))
-            axes[i, j].plot(support, ratios[it], '-b', label='{:.2f}'.format(pred[it]))
-            min_post = np.minimum(np.min(ratios[it]), np.min(analytic[it]))
-            max_post = np.maximum(np.max(ratios[it]), np.max(analytic[it]))
-            axes[i, j].vlines(truths[it], min_post, max_post, colors='r', linestyles='dotted',
+            axes[i, j].plot(support, ratios[it], '-', label='{:.2f}'.format(pred[it]))
+            # axes[i, j].plot(support, analytic[it], '--', label='{:.2f}'.format(support[np.argmax(analytic[it])]))
+            min_post = np.min(ratios[it])  # np.minimum(, np.min(analytic[it]))
+            max_post = np.max(ratios[it])  # np.maximum(, np.max(analytic[it]))
+            axes[i, j].vlines(truths[it], min_post, max_post, colors='black', linestyles='dotted',
                               label='{:.2f}'.format(truths[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
             if np.count_nonzero(samples[it, :, 0] + 1) == 3:
@@ -611,12 +609,12 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5
             if i == int(nrow - 1):
                 axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
             if j == 0:
-                axes[i, j].set_ylabel(r"$p(H_0$ | $\Delta_t, \Delta_\phi)$")
+                axes[i, j].set_ylabel(r"$p(H_0 \mid \Delta t, \Delta \phi)$")
             it += 1
 
     # saving
-    plt.rcParams['axes.facecolor'] = 'white'
-    plt.rcParams['savefig.facecolor'] = 'white'
+    # plt.rcParams['axes.facecolor'] = 'white'
+    # plt.rcParams['savefig.facecolor'] = 'white'
     plt.savefig(path_out + '/posteriors.png', bbox_inches='tight')
 
     # file to save
@@ -627,18 +625,18 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5
     NRE = post_file.create_group("NRE_global")
     H0 = NRE.create_dataset("Hubble_cst", (npts,), dtype='f')
     post = NRE.create_dataset("posterior", (nsamp, npts), dtype='f')
-    post_anl = NRE.create_dataset("analytical", (nsamp, npts), dtype='f')
+    # post_anl = NRE.create_dataset("analytical", (nplots, npts), dtype='f')
 
     truth_set = post_file.create_dataset("truth", (nsamp,), dtype='f')
 
     H0[:] = support
     post[:, :] = ratios
-    post_anl[:, :] = analytic
+    # post_anl[:, :] = analytic
     truth_set[:] = truths[:nsamp]
 
     post_file.close()
 
-    # Highest 
+    # Highest
     credibility = np.zeros((nsamp,))
     for i in range(nsamp):
 
@@ -667,20 +665,19 @@ def inference(file_keys, file_data, file_model, path_out, nrow=5, ncol=4, npts=5
     for i in range(len(bins)):
         emperical_coverage[i] = np.mean(np.where(credibility <= bins[i], 1, 0))
 
-    plt.style.use(['dark_background'])
     plt.figure()
-    plt.plot(bins, bins, '--', color='white')
-    plt.plot(bins, emperical_coverage, '-', color='lime')
-    plt.xlabel("Credibility")
-    plt.ylabel("Emperical coverage")
-    plt.text(0., .9, "Underconfident", fontsize='large')
-    plt.text(.65, .05, "Overconfident", fontsize='large')
+    plt.plot(bins, bins, '--k')
+    plt.plot(bins, emperical_coverage, '-', color="darkorange")
+    plt.xlabel("Highest probability density region")
+    plt.ylabel("Fraction of truths within")
+    plt.text(0., .9, "Underconfident")  # , fontsize='large')
+    plt.text(.6, .05, "Overconfident")  # , fontsize='large')
     # plt.rcParams['axes.facecolor'] = 'white'
     # plt.rcParams['savefig.facecolor'] = 'white'
-    plt.savefig(path_out + '/coverage.png', bbox_inches='tight')
+    plt.savefig(path_out + '/coverage.pdf', bbox_inches='tight', dpi=200)
 
 
-def joint_inference(file_data, file_model, path_out, npts=5000, lower_bound=69., upper_bound=71., batch_size=128):
+def joint_inference(file_data, file_model, path_out, npts=50000, lower_bound=65., upper_bound=75., batch_size=200):
     """
         Performs the joint inference on a population of lenses
         Inputs
@@ -715,7 +712,7 @@ def joint_inference(file_data, file_model, path_out, npts=5000, lower_bound=69.,
     prior = np.linspace(lower_bound, upper_bound, npts).reshape(npts, 1)
     prior_tile = np.tile(prior, (nsamp, 1))
     prior = prior.flatten()
-    
+
     dataset_test = torch.utils.data.TensorDataset(data, torch.from_numpy(prior_tile))
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     post = []
@@ -727,25 +724,37 @@ def joint_inference(file_data, file_model, path_out, npts=5000, lower_bound=69.,
     prior_tile = prior_tile.reshape(nsamp, npts)
     post = normalization(prior_tile, post)
 
-    joint1 = np.sum(np.log(post[:10]), axis=0)
+    joint1 = np.sum(np.log(post[:50]), axis=0)
     joint1 -= log_trick(joint1)
-    joint2 = np.sum(np.log(post[:100]), axis=0)
+    joint2 = np.sum(np.log(post[:500]), axis=0)
     joint2 -= log_trick(joint2)
-    joint3 = np.sum(np.log(post[:1000]), axis=0)
+    joint3 = np.sum(np.log(post[:3000]), axis=0)
     joint3 -= log_trick(joint3)
-    joint4 = np.sum(np.log(post), axis=0)
+    joint4 = np.sum(np.log(post[:8000]), axis=0)
     joint4 -= log_trick(joint4)
     joints = np.concatenate((joint1[:, None], joint2[:, None], joint3[:, None], joint4[:, None]), axis=1)
-    
-    
-    plt.style.use(['dark_background'])
+
     plt.figure()
-    plt.plot(prior, np.exp(joint4), '-', color='cyan', zorder=0, label='10,000 lenses')
-    plt.plot(prior, np.exp(joint3), '--', color='magenta', zorder=5, label='1000 lenses')
-    plt.plot(prior, np.exp(joint2), '-.', color='green', zorder=10, label='100 lenses')
-    plt.plot(prior, np.exp(joint1), ':', color='yellow', zorder=15, label='10 lenses')
+    plt.plot(prior, np.exp(joint4), '-', zorder=0, label='8,000')
+    plt.plot(prior, np.exp(joint3), '--', zorder=5, label='3,000')
+    plt.plot(prior, np.exp(joint2), '-.', zorder=10, label='500')
+    plt.plot(prior, np.exp(joint1), ':', zorder=15, label='50')
     min_post = np.min(np.exp(joints))
     max_post = np.max(np.exp(joints))
-    plt.vlines(true, min_post, max_post, color='white', linestyles='solid', zorder=20, label="True value")
+    plt.vlines(true, min_post, max_post, color='black', linestyles='solid', zorder=20, label="True value")
     plt.legend()
-    plt.savefig(path_out + '/inference.png', bbox_inches='tight')
+    plt.xlim([69.7, 70.3])
+    plt.xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
+    plt.ylabel(r"$p(H_0 \mid \Delta t, \Delta \phi)$")
+    plt.savefig(path_out + '/inference.pdf', bbox_inches='tight', dpi=200)
+
+    plt.figure()
+    plt.plot(prior, np.exp(joint4), '-', label='8,000')
+    min_post = np.min(np.exp(joint4))
+    max_post = np.max(np.exp(joint4))
+    plt.vlines(true, min_post, max_post, color='black', linestyles='solid', label="True value")
+    plt.legend()
+    plt.xlim([69.9, 70.1])
+    plt.xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
+    plt.ylabel(r"$p(H_0 \mid \Delta t, \Delta \phi)$")
+    plt.savefig(path_out + '/test_bias.pdf', bbox_inches='tight', dpi=200)

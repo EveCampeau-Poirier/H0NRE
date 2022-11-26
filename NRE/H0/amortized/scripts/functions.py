@@ -54,20 +54,21 @@ def pol2cart(r, theta):
     return r * torch.cos(theta), r * torch.sin(theta)
 
 
-def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_ext, xim_fov, yim_fov, x0_AGN=0.,
-                          y0_AGN=0.):
+def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_ext, xim_fov, yim_fov):
     """Computes the position and the magnification of AGN images
     Also outputs the Fermat potential at these positions"""
 
     # Parameters
+    x0_AGN = 3e-6 * torch.randn((x0_lens.size(0)))
+    y0_AGN = 3e-6 * torch.randn((y0_lens.size(0)))
     theta_E = theta_E.unsqueeze(1)
     f = ellip.unsqueeze(1)
     f_prime = np.sqrt(1 - f ** 2)
 
     # Image positions in the lens coordinate system
-    im_pos_trans = torch.zeros(x0_lens.shape[0], xim_fov.shape[0], 2, 1)
-    im_pos_trans[:, :, 0, 0] = xim_fov[None, :] - x0_lens[:, None]
-    im_pos_trans[:, :, 1, 0] = yim_fov[None, :] - y0_lens[:, None]
+    im_pos_trans = torch.zeros(xim_fov.shape[0], xim_fov.shape[1], 2, 1)
+    im_pos_trans[:, :, 0, 0] = xim_fov - x0_lens.unsqueeze(1)
+    im_pos_trans[:, :, 1, 0] = yim_fov - y0_lens.unsqueeze(1)
     im_pos_lens = torch.matmul(mtx_rot(-phi), im_pos_trans).squeeze(3)
     xim, yim = im_pos_lens[:, :, 0], im_pos_lens[:, :, 1]
     r_im, phi_im = cart2pol(yim, xim)
@@ -126,13 +127,12 @@ def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_
     fermat_pot = geo_term - lens_term - shear_term
 
     fermat_pot = fermat_pot - torch.amin(fermat_pot, dim=1, keepdim=True)
-    fermat_pot = fermat_pot[fermat_pot != 0.].reshape(fermat_pot.shape[0], -1)
+    fermat_pot = fermat_pot[fermat_pot != 0.].view(fermat_pot.shape[0], -1)
 
     return fermat_pot
 
 
 def doub_and_quad_potentials(nim, pos, param):
-
     if torch.any(nim == 1):
         idd = torch.where(nim == 1)
         psd = pos[idd][:, :, :-2]
@@ -160,7 +160,7 @@ def doub_and_quad_potentials(nim, pos, param):
     return pot
 
 
-def dt_noise(dt, sig=.35):  ###
+def dt_noise(dt, sig=.35):
     """
     Adds noise to time delays
     Inputs
@@ -174,7 +174,7 @@ def dt_noise(dt, sig=.35):  ###
     return noisy_dt
 
 
-def param_noise(param, sig=torch.tensor([.004, .004, .0035, .015, .0075, .001, .015])):
+def param_noise(param, sig=torch.tensor([4e-6, 4e-6, 1e-7, 4e-6, 4e-6, 4e-6, 4e-6])):
     """
     Adds noise to the parameters
     Inputs
@@ -183,11 +183,16 @@ def param_noise(param, sig=torch.tensor([.004, .004, .0035, .015, .0075, .001, .
         noisy_param : (tensor)[batch_size x 7] noisy param
     """
     noisy_param = param + sig[None, :] * torch.randn((param.size(0), param.size(1)))
+    while torch.any(noisy_param[:, 2] >= 1):
+        idx = torch.where(noisy_param[:, 2] >= 1)
+        for i in idx[0]:
+            new_noise = sig[2] * torch.randn((1))
+            noisy_param[i, 2] = param[i, 2] + new_noise
 
     return noisy_param
 
 
-def pos_noise(pos, sig=.02):
+def pos_noise(pos, sig=4e-6):
     """
         Adds noise to the image positions
         Inputs

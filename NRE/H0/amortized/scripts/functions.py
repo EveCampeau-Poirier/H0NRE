@@ -29,39 +29,190 @@ np.random.seed(0)
 
 # --- Functions for training -----------------------------------------------
 
-def acc_fct(y_hat, y):
-    """
-    Computes the model's predictions accuracy
-    Inputs
-        y_hat : (tensor) [batch_size x 2] Model's prediction
-        y : (tensor) [batch_size] Labels
-    Outputs
-        acc : (float) Accuracy
-    """
-    pred = torch.argmax(y_hat, axis=1)
-    acc = torch.mean((y == pred).float())
-
-    return acc
+# NORM
+def norm(x, y):
+    return torch.sqrt(x ** 2 + y ** 2)
 
 
-def gaussian_noise(x, sig_dt=.41, sig_pot=.0045):  ###
+# ROTATION MATRIX
+def mtx_rot(phi):
+    mtx = torch.zeros(phi.shape[0], 1, 2, 2)
+    mtx[:, 0, 0, 0] = torch.cos(phi)
+    mtx[:, 0, 0, 1] = -torch.sin(phi)
+    mtx[:, 0, 1, 0] = torch.sin(phi)
+    mtx[:, 0, 1, 1] = torch.cos(phi)
+    return mtx
+
+
+# CARTESIAN COORDINATES TO SPHERICAL
+def cart2pol(x, y):
+    return norm(x, y), torch.atan2(y, x)
+
+
+# SPHERICAL COORDINATES TO CARTESIAN
+def pol2cart(r, theta):
+    return r * torch.cos(theta), r * torch.sin(theta)
+
+
+def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_ext, xim_fov, yim_fov, x0_AGN=0.,
+                          y0_AGN=0.):
+    """Computes the position and the magnification of AGN images
+    Also outputs the Fermat potential at these positions"""
+
+    # Parameters
+    theta_E = theta_E.unsqueeze(1)
+    f = ellip.unsqueeze(1)
+    f_prime = np.sqrt(1 - f ** 2)
+
+    # Image positions in the lens coordinate system
+    im_pos_trans = torch.zeros(x0_lens.shape[0], xim_fov.shape[0], 2, 1)
+    im_pos_trans[:, :, 0, 0] = xim_fov[None, :] - x0_lens[:, None]
+    im_pos_trans[:, :, 1, 0] = yim_fov[None, :] - y0_lens[:, None]
+    im_pos_lens = torch.matmul(mtx_rot(-phi), im_pos_trans).squeeze(3)
+    xim, yim = im_pos_lens[:, :, 0], im_pos_lens[:, :, 1]
+    r_im, phi_im = cart2pol(yim, xim)
+
+    # AGN positions in the lens coordinate system
+    src_pos_trans = torch.zeros(x0_lens.shape[0], 1, 2, 1)
+    src_pos_trans[:, 0, 0, 0] = x0_AGN - x0_lens
+    src_pos_trans[:, 0, 1, 0] = y0_AGN - y0_lens
+    src_pos_lens = torch.matmul(mtx_rot(-phi), src_pos_trans).squeeze(3)
+    xsrc, ysrc = src_pos_lens[:, :, 0], src_pos_lens[:, :, 1]
+
+    # Coordinate translation for the external shear
+    lens_pos = torch.cat((x0_lens.unsqueeze(1), y0_lens.unsqueeze(1)), dim=1).unsqueeze(1).unsqueeze(3)
+    lens_pos_rot = torch.matmul(mtx_rot(-phi), lens_pos).squeeze(3)
+    xtrans, ytrans = lens_pos_rot[:, :, 0], lens_pos_rot[:, :, 1]
+
+    # External shear in the lens coordinate system
+    gamma1_fov, gamma2_fov = pol2cart(gamma_ext, phi_ext)
+    gamma_vec = torch.cat((gamma1_fov.unsqueeze(1), gamma2_fov.unsqueeze(1)), dim=1).unsqueeze(1).unsqueeze(3)
+    gamma_vec_rot = torch.matmul(mtx_rot(-2 * phi), gamma_vec).squeeze(3)
+    gamma1, gamma2 = gamma_vec_rot[:, :, 0], gamma_vec_rot[:, :, 1]
+
+    # X deflection angle (eq. 27a Kormann et al. 1994)
+    def alphax(varphi):
+        return theta_E * np.sqrt(f) / f_prime * torch.arcsin(f_prime * torch.sin(varphi))
+
+    # Y deflection angle (eq. 27a Kormann et al. 1994)
+    def alphay(varphi):
+        return theta_E * np.sqrt(f) / f_prime * torch.arcsinh(f_prime / f * torch.cos(varphi))
+
+    # Lens potential deviation from a SIS (Meneghetti, 19_2018, psi_tilde)
+    def psi_tilde(varphi):
+        return torch.sin(varphi) * alphax(varphi) + torch.cos(varphi) * alphay(varphi)
+
+    # Lens potential (eq. 26a Kormann et al. 1994)
+    def lens_pot(varphi):
+        return psi_tilde(varphi) * radial(varphi)
+
+    # Shear potential (eq. 3.80 Meneghetti)
+    def shear_pot(x, y):
+        return gamma1 / 2 * (x ** 2 - y ** 2) + gamma2 * x * y
+
+    # Radial componant (eq. 34 Kormann et al. 1994)
+    def radial(varphi):
+        usual_rad = ysrc * torch.cos(varphi) + xsrc * torch.sin(varphi) + psi_tilde(varphi)
+        translation = gamma1 * (xtrans * torch.sin(varphi) - ytrans * torch.cos(varphi)) + gamma2 * (
+                xtrans * torch.cos(varphi) + ytrans * torch.sin(varphi))
+        shear_term = 1 + gamma1 * (torch.cos(varphi) ** 2 - torch.sin(varphi) ** 2) - 2 * gamma2 * torch.cos(
+            varphi) * torch.sin(varphi)
+        return (usual_rad + translation) / shear_term
+
+    # Fermat potential
+    geo_term = norm(xim - xsrc, yim - ysrc) ** 2 / 2
+    lens_term = lens_pot(phi_im)
+    shear_term = shear_pot(xim + xtrans, yim + ytrans)
+    fermat_pot = geo_term - lens_term - shear_term
+
+    fermat_pot = fermat_pot - torch.amin(fermat_pot, dim=1, keepdim=True)
+    fermat_pot = fermat_pot[fermat_pot != 0.].reshape(fermat_pot.shape[0], -1)
+
+    return fermat_pot
+
+
+def doub_and_quad_potentials(nim, pos, param):
+
+    if torch.any(nim == 1):
+        idd = torch.where(nim == 1)
+        psd = pos[idd][:, :, :-2]
+        prd = param[idd]
+        potd = get_Fermat_potentials(prd[:, 0], prd[:, 1], prd[:, 2],
+                                     prd[:, 3], prd[:, 4], prd[:, 5],
+                                     prd[:, 6], psd[:, 0], psd[:, 1])
+        potd = torch.cat((potd, -torch.ones((potd.shape[0], 2), device=potd.device)), dim=1)
+        pot = potd
+
+    if torch.any(nim == 3):
+        idq = torch.where(nim == 3)
+        psq = pos[idq]
+        prq = param[idq]
+        potq = get_Fermat_potentials(prq[:, 0], prq[:, 1], prq[:, 2],
+                                     prq[:, 3], prq[:, 4], prq[:, 5],
+                                     prq[:, 6], psq[:, 0], psq[:, 1])
+        pot = potq
+
+    if torch.any(nim == 1) and torch.any(nim == 3):
+        pot = torch.ones((pos.shape[0], 3), device=potd.device)
+        pot[idd] = potd
+        pot[idq] = potq
+
+    return pot
+
+
+def dt_noise(dt, sig=.35):  ###
     """
     Adds noise to time delays
     Inputs
         sig_dt : (float) noise standard deviation on time delays
-        sig_pot : (float) noise standard deviation on potentials
     Outputs
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
-    mask_pad = torch.where(x[:, :, 0] == -1, 0, 1)
-    mask_zero = torch.where(x[:, :, 0] == 0, 0, 1)
-    noise_dt = sig_dt * torch.randn((x.size(0), x.size(1)), device="cpu")
-    noise_pot = sig_pot * torch.randn((x.size(0), x.size(1)), device="cpu")
-    noisy_data = x.clone()
-    noisy_data[:, :, 0] += noise_dt * mask_pad * mask_zero
-    noisy_data[:, :, 1] += noise_pot * mask_pad * mask_zero
+    mask = torch.where(dt > 0, 1, 0)
+    noisy_dt = dt + sig * torch.randn((dt.size(0), dt.size(1))) * mask
 
-    return noisy_data
+    return noisy_dt
+
+
+def param_noise(param, sig=torch.tensor([.004, .004, .0035, .015, .0075, .001, .015])):
+    """
+    Adds noise to the parameters
+    Inputs
+        sig : (float) noise standard deviation on param
+    Outputs
+        noisy_param : (tensor)[batch_size x 7] noisy param
+    """
+    noisy_param = param + sig[None, :] * torch.randn((param.size(0), param.size(1)))
+
+    return noisy_param
+
+
+def pos_noise(pos, sig=.02):
+    """
+        Adds noise to the image positions
+        Inputs
+            sig : (float) noise standard deviation on positions
+        Outputs
+            noisy_pos : (tensor)[batch_size x 2 x 4] noisy param
+        """
+    noisy_pos = pos + sig * torch.randn((pos.size(0), pos.size(1), pos.size(2)))
+
+    return noisy_pos
+
+
+def normalization(x, y):
+    """
+        Normalizes distributions
+        Inputs
+            x : (array) H0 values
+            y : (array) posterior probabilities
+        Outputs
+            y : (array) Norm
+        """
+    norm = np.trapz(y, x, axis=1)
+    y /= norm[:, None]
+
+    return y
 
 
 def log_trick(logp):
@@ -80,29 +231,29 @@ def log_trick(logp):
     return trick
 
 
-def r_estimator(model, x1, x2, x3):
+def r_estimator(model, sm, H0, z):
     """
     Likelihood ratio estimator
     Inputs
-        x1 : (tensor)[nexamp x 1 x npix x npix] time delays mask
-        x2 : (tensor)[nexamp x 1] Hubble constant
+        sm : (tensor)[nexamp x 1 x npix x npix] time delays mask
+        H0 : (tensor)[nexamp x 1] Hubble constant
     Outputs
         lr : (array)[nexamp] likelihood ratio
     """
 
-    x1 = x1.to(device, non_blocking=True).float()
-    x2 = x2.to(device, non_blocking=True).float()
-    x3 = x3.to(device, non_blocking=True).float()
+    sm = sm.to(device, non_blocking=True).float()
+    H0 = H0.to(device, non_blocking=True).float()
+    z = z.to(device, non_blocking=True).float()
 
     # model = model.to(device, non_blocking=True)
     model.eval()
 
     with torch.no_grad():
-        output = model(x1, x2, x3)
+        output = model(sm, H0, z)
 
-    x1.detach()
-    x2.detach()
-    x3.detach()
+    sm.detach()
+    H0.detach()
+    z.detach()
 
     sm = torch.nn.Softmax(dim=1)
     prob = sm(output)
@@ -112,19 +263,19 @@ def r_estimator(model, x1, x2, x3):
     return lr
 
 
-def normalization(x, y):
+def acc_fct(y_hat, y):
     """
-        Normalizes distributions
-        Inputs
-            x : (array) H0 values
-            y : (array) posterior probabilities
-        Outputs
-            y : (array) Norm
-        """
-    norm = np.trapz(y, x, axis=1)
-    y /= norm[:, None]
+    Computes the model's predictions accuracy
+    Inputs
+        y_hat : (tensor) [batch_size x 2] Model's prediction
+        y : (tensor) [batch_size] Labels
+    Outputs
+        acc : (float) Accuracy
+    """
+    pred = torch.argmax(y_hat, axis=1)
+    acc = torch.mean((y == pred).float())
 
-    return y
+    return acc
 
 
 def split_data(file, path_in):
@@ -141,25 +292,24 @@ def split_data(file, path_in):
     # Reading data
     dataset = h5py.File(os.path.join(path_in, file), 'r')
     dt = dataset["time_delays"][:]
-    pot = dataset["Fermat_potential"][:]
+    param = dataset["parameters"][:, :7]
     H0 = dataset["Hubble_cst"][:]
     z = dataset["redshifts"][:]
+    pos = dataset["positions"][:]
     dataset.close()
 
-    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    nsamp = samples.shape[0]
-    samples = samples[samples != 0]
-    samples = samples.reshape(nsamp, 3, 2)
+    nsamp = H0.shape[0]
+    dt = dt[dt != 0].reshape(nsamp, 3)
 
     # Splitting sets
     keys = np.arange(nsamp)
-    train_keys = np.random.choice(keys, size=int(.8 * nsamp), replace=False)
-    left_keys = np.setdiff1d(keys, train_keys)
-    valid_keys = np.random.choice(left_keys, size=int(.1 * nsamp), replace=False)
-    test_keys = np.setdiff1d(left_keys, valid_keys)
+    tr_k = np.random.choice(keys, size=int(.8 * nsamp), replace=False)
+    left_keys = np.setdiff1d(keys, tr_k)
+    vl_k = np.random.choice(left_keys, size=int(.1 * nsamp), replace=False)
+    ts_k = np.setdiff1d(left_keys, vl_k)
 
-    x1_train, x2_train, x3_train = samples[train_keys], H0[train_keys], z[train_keys]
-    x1_valid, x2_valid, x3_valid = samples[valid_keys], H0[valid_keys], z[valid_keys]
+    dt_tr, H0_tr, z_tr, pr_tr, ps_tr = dt[tr_k], H0[tr_k], z[tr_k], param[tr_k], pos[tr_k]
+    dt_vl, H0_vl, z_vl, pr_vl, ps_vl = dt[vl_k], H0[vl_k], z[vl_k], param[vl_k], pos[vl_k]
 
     # Saving keys
     if not os.path.isfile(path_in + '/keys.hdf5'):
@@ -168,13 +318,15 @@ def split_data(file, path_in):
         train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
         valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
         test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
-        train_ids[:] = train_keys
-        valid_ids[:] = valid_keys
-        test_ids[:] = test_keys
+        train_ids[:] = tr_k
+        valid_ids[:] = vl_k
+        test_ids[:] = ts_k
 
     # Outputs
-    train_set = [torch.from_numpy(x1_train), torch.from_numpy(x2_train), torch.from_numpy(x3_train)]
-    valid_set = [torch.from_numpy(x1_valid), torch.from_numpy(x2_valid), torch.from_numpy(x3_valid)]
+    train_set = [torch.from_numpy(dt_tr), torch.from_numpy(H0_tr), torch.from_numpy(z_tr),
+                 torch.from_numpy(pr_tr), torch.from_numpy(ps_tr)]
+    valid_set = [torch.from_numpy(dt_vl), torch.from_numpy(H0_vl), torch.from_numpy(z_vl),
+                 torch.from_numpy(pr_vl), torch.from_numpy(ps_vl)]
 
     return train_set, valid_set
 
@@ -206,11 +358,11 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
 
     # Datasets
     train_set, valid_set = split_data(file, path_in)
-    x1_train, x2_train, x3_train = train_set
-    x1_val, x2_val, x3_val = valid_set
+    dt_tr, H0_tr, z_tr, pr_tr, ps_tr = train_set
+    dt_vl, H0_vl, z_vl, pr_vl, ps_vl = valid_set
 
-    dataset_train = torch.utils.data.TensorDataset(x1_train, x2_train, x3_train)
-    dataset_valid = torch.utils.data.TensorDataset(x1_val, x2_val, x3_val)
+    dataset_train = torch.utils.data.TensorDataset(dt_tr, H0_tr, z_tr, pr_tr, ps_tr)
+    dataset_valid = torch.utils.data.TensorDataset(dt_vl, H0_vl, z_vl, pr_vl, ps_vl)
 
     # File to save logs
     if os.path.isfile(path_out + '/logs.hdf5'):
@@ -252,21 +404,28 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
 
             step = 0  # step initialization (batch number)
             # loop on batches
-            for x1, x2, x3 in dataloader:
-                half_batch_size = int(x1.shape[0] / 2)
+            for dt, H0, z, param, pos in dataloader:
 
-                x1 = gaussian_noise(x1)
-                x1 = x1.to(device, non_blocking=True).float()
-                x1a = x1[:half_batch_size]
-                x1b = x1[half_batch_size:]
+                dt = dt_noise(dt)
+                param = param_noise(param)
+                pos = pos_noise(pos)
+                nim = torch.count_nonzero(dt + 1, dim=1)
+                pot = doub_and_quad_potentials(nim, pos, param)
+                sm = torch.cat((dt[:, :, None], pot[:, :, None]), dim=2)
+                sm = sm.to(device, non_blocking=True).float()
 
-                x2 = x2.to(device, non_blocking=True).float()
-                x2a = x2[:half_batch_size]
-                x2b = x2[half_batch_size:]
+                half_batch_size = int(dt.shape[0] / 2)
 
-                x3 = x3.to(device, non_blocking=True).float()
-                x3a = x3[:half_batch_size]
-                x3b = x3[half_batch_size:]
+                sma = sm[:half_batch_size]
+                smbb = sm[half_batch_size:]
+
+                H0 = H0.to(device, non_blocking=True).float()
+                H0a = H0[:half_batch_size]
+                H0b = H0[half_batch_size:]
+
+                z = z.to(device, non_blocking=True).float()
+                za = z[:half_batch_size]
+                zb = z[half_batch_size:]
 
                 y_dep = torch.ones((half_batch_size)).to(device, non_blocking=True).long()
                 y_ind = torch.zeros((half_batch_size)).to(device, non_blocking=True).long()
@@ -279,19 +438,19 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
 
                     if anomaly_detection:
                         with autograd.detect_anomaly():
-                            y_hat_a_dep = model(x1a, x2a, x3a)
-                            y_hat_a_ind = model(x1a, x2b, x3a)
+                            y_hat_a_dep = model(sma, H0a, za)
+                            y_hat_a_ind = model(sma, H0b, za)
                             loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-                            y_hat_b_dep = model(x1b, x2b, x3b)
-                            y_hat_b_ind = model(x1b, x2a, x3b)
+                            y_hat_b_dep = model(smb, H0b, zb)
+                            y_hat_b_ind = model(smb, H0a, zb)
                             loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                             loss = loss_a + loss_b
                     else:
-                        y_hat_a_dep = model(x1a, x2a, x3a)
-                        y_hat_a_ind = model(x1a, x2b, x3a)
+                        y_hat_a_dep = model(sma, H0a, za)
+                        y_hat_a_ind = model(sma, H0b, za)
                         loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-                        y_hat_b_dep = model(x1b, x2b, x3b)
-                        y_hat_b_ind = model(x1b, x2a, x3b)
+                        y_hat_b_dep = model(smb, H0b, zb)
+                        y_hat_b_ind = model(smb, H0a, zb)
                         loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                         loss = loss_a + loss_b
 
@@ -306,11 +465,11 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                 # validation phase
                 else:
                     with torch.no_grad():
-                        y_hat_a_dep = model(x1a, x2a, x3a)
-                        y_hat_a_ind = model(x1a, x2b, x3a)
+                        y_hat_a_dep = model(sma, H0a, za)
+                        y_hat_a_ind = model(sma, H0b, za)
                         loss_a = loss_fn(y_hat_a_dep, y_dep) + loss_fn(y_hat_a_ind, y_ind)
-                        y_hat_b_dep = model(x1b, x2b, x3b)
-                        y_hat_b_ind = model(x1b, x2a, x3b)
+                        y_hat_b_dep = model(smb, H0b, zb)
+                        y_hat_b_ind = model(smb, H0a, zb)
                         loss_b = loss_fn(y_hat_b_dep, y_dep) + loss_fn(y_hat_b_ind, y_ind)
                         loss = loss_a + loss_b
 
@@ -390,7 +549,7 @@ def learning_curves(file, path_out):
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
     plt.legend()
-    plt.savefig(path_out + '/loss.png', bbox_inches='tight')
+    plt.savefig(path_out + '/loss.png', bbox_inches='tight', dpi=200)
 
     # accuracy
     plt.figure()
@@ -401,10 +560,10 @@ def learning_curves(file, path_out):
     plt.rcParams['axes.facecolor'] = 'white'
     plt.rcParams['savefig.facecolor'] = 'white'
     plt.legend()
-    plt.savefig(path_out + '/acc.png', bbox_inches='tight')
+    plt.savefig(path_out + '/acc.png', bbox_inches='tight', dpi=200)
 
 
-def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=5000, batch_size=128):
+def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=5000, batch_size=200):
     """
     Computes the NRE posterior, the analytical posterior and performs the coverage diagnostic
     Inputs
@@ -440,55 +599,57 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
     truths = truths.flatten()
     test_keys = np.delete(test_keys, idx_out, axis=0)
     dt = dataset["time_delays"][test_keys]
-    pot = dataset["Fermat_potential"][test_keys]
     z = dataset["redshifts"][test_keys]
+    param = dataset["parameters"][test_keys, :7]
+    pos = dataset["positions"][test_keys]
     dataset.close()
 
-    # reshape data
-    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    nsamp = samples.shape[0]
-    samples = samples[samples != 0]
-    samples = samples.reshape(nsamp, 3, 2)
+    nsamp = truths.shape[0]
+    dt = dt[dt != 0].reshape(nsamp, 3, 2)
+    noisy_dt = dt_noise(torch.from_numpy(dt))
+    noisy_param = param_noise(torch.from_numpy(param))
+    noisy_pos = pos_noise(torch.from_numpy(pos))
+    nim = torch.count_nonzero(noisy_dt + 1, dim=1)
+    pot = doub_and_quad_potentials(nim, noisy_pos, noisy_param)
+    samples = torch.cat((noisy_dt[:, :, None], pot[:, :, None]), dim=2)
 
     # observations
-    noisy_data = gaussian_noise(torch.from_numpy(samples))
-    noisy_data_repeated = torch.repeat_interleave(noisy_data, npts, dim=0)
-    z_repeated = torch.repeat_interleave(torch.from_numpy(z), npts, dim=0)
+    samples_rep = torch.repeat_interleave(samples, npts, dim=0)
+    z_rep = torch.repeat_interleave(torch.from_numpy(z), npts, dim=0)
 
     # Global NRE posterior
-    support = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
-    support_tile = np.tile(support, (nsamp, 1))
+    prior = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
+    prior_tile = np.tile(prior, (nsamp, 1))
+    prior = prior.flatten()
 
-    dataset_test = torch.utils.data.TensorDataset(noisy_data_repeated, torch.from_numpy(support_tile), z_repeated)
+    dataset_test = torch.utils.data.TensorDataset(samples_rep, torch.from_numpy(prior_tile), z_rep)
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
-    ratios = []
-    for x1, x2, x3 in dataloader:
-        preds = r_estimator(model, x1, x2, x3)
-        ratios.extend(preds)
+    post = []
+    for samp, H0, shift in dataloader:
+        ratios = r_estimator(model, samp, H0, shift)
+        post.extend(ratios)
 
-    ratios = np.asarray(ratios).reshape(nsamp, npts)
-    support_tile = support_tile.reshape(nsamp, npts)
-    ratios = normalization(support_tile, ratios)
+    post = np.asarray(post).reshape(nsamp, npts)
+    prior_tile = prior_tile.reshape(nsamp, npts)
+    post = normalization(prior_tile, post)
 
     # predictions
-    arg_pred = np.argmax(ratios, axis=1)
-    pred = support_tile[np.arange(nsamp), arg_pred]
-
-    support = support.flatten()
+    arg_pred = np.argmax(post, axis=1)
+    pred = prior_tile[np.arange(nsamp), arg_pred]
 
     it = 0
     fig, axes = plt.subplots(ncols=ncol, nrows=nrow, sharex=True, sharey=True, figsize=(3 * ncol, 3 * nrow))
     for i in range(nrow):
         for j in range(ncol):
-            axes[i, j].plot(support, ratios[it], '-', label='{:.2f}'.format(pred[it]))
-            min_post = np.min(ratios[it])
-            max_post = np.max(ratios[it])
+            axes[i, j].plot(prior, post[it], '-', label='{:.2f}'.format(pred[it]))
+            min_post = np.min(post[it])
+            max_post = np.max(post[it])
             axes[i, j].vlines(truths[it], min_post, max_post, colors='black', linestyles='dotted',
                               label='{:.2f}'.format(truths[it]))
             axes[i, j].legend(frameon=False, borderpad=.2, handlelength=.6, fontsize=9, handletextpad=.4)
-            if np.count_nonzero(samples[it, :, 0] + 1) == 3:
+            if np.count_nonzero(dt[it] + 1) == 3:
                 axes[i, j].set_title("Quad")
-            if np.count_nonzero(samples[it, :, 0] + 1) == 1:
+            if np.count_nonzero(dt[it] + 1) == 1:
                 axes[i, j].set_title("Double")
             if i == int(nrow - 1):
                 axes[i, j].set_xlabel(r"H$_0$ (km Mpc$^{-1}$ s$^{-1}$)")
@@ -510,9 +671,9 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
 
     truth_set = post_file.create_dataset("truth", (nsamp,), dtype='f')
 
-    H0[:] = support
-    post[:, :] = ratios
-    truth_set[:] = truths[:nsamp]
+    H0[:] = prior
+    post[:, :] = post
+    truth_set[:] = truths
 
     post_file.close()
 
@@ -520,8 +681,8 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
     credibility = np.zeros((nsamp,))
     for i in range(nsamp):
 
-        idx_truth = np.where(abs(support - truths[i]) == np.min(abs(support - truths[i])))[0]
-        probs = ratios[i]
+        idx_truth = np.where(abs(prior - truths[i]) == np.min(abs(prior - truths[i])))[0]
+        probs = post[i]
         prob_truth = probs[idx_truth]
 
         prob_false = probs.copy()
@@ -537,7 +698,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
         end = np.maximum(idx_truth, idx_equal_prob)
         idx_HPD = np.arange(start, end)
 
-        credibility[i] = np.trapz(probs[idx_HPD], support[idx_HPD])
+        credibility[i] = np.trapz(probs[idx_HPD], prior[idx_HPD])
 
     # Coverage diagnostic
     bins = np.linspace(0., 1., 100)
@@ -555,7 +716,7 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
     plt.savefig(path_out + '/coverage.pdf', bbox_inches='tight', dpi=200)
 
 
-def joint_inference(file_data, file_model, path_out, npts=50000, lower_bound=65., upper_bound=75., batch_size=200):
+def joint_inference(file_data, file_model, path_out, npts=50000, lower_bound=65., higher_bound=75., batch_size=200):
     """
         Performs the joint inference on a population of lenses
         Inputs
@@ -572,32 +733,37 @@ def joint_inference(file_data, file_model, path_out, npts=50000, lower_bound=65.
 
     # import data
     dataset = h5py.File(file_data, 'r')
-    H0 = dataset["Hubble_cst"][:]
+    truths = dataset["Hubble_cst"][:]
     dt = dataset["time_delays"][:]
-    pot = dataset["Fermat_potential"][:]
     z = dataset["redshifts"][:]
+    param = dataset["parameters"][:, :7]
+    pos = dataset["positions"][:]
     dataset.close()
-    samples = np.concatenate((dt[:, :, None], pot[:, :, None]), axis=2)
-    nsamp = samples.shape[0]
-    samples = samples[samples != 0]
-    samples = samples.reshape(nsamp, 3, 2)
-    true = float(np.unique(H0))
+
+    true = float(np.unique(truths))
+    nsamp = truths.shape[0]
+    dt = dt[dt != 0].reshape(nsamp, 3, 2)
+    noisy_dt = dt_noise(torch.from_numpy(dt))
+    noisy_param = param_noise(torch.from_numpy(param))
+    noisy_pos = pos_noise(torch.from_numpy(pos))
+    nim = torch.count_nonzero(noisy_dt + 1, dim=1)
+    pot = doub_and_quad_potentials(nim, noisy_pos, noisy_param)
+    samples = torch.cat((noisy_dt[:, :, None], pot[:, :, None]), dim=2)
 
     # observations
-    x = gaussian_noise(torch.from_numpy(samples))
-    data = torch.repeat_interleave(x, npts, dim=0)
+    samples_rep = torch.repeat_interleave(samples, npts, dim=0)
     z_rep = torch.repeat_interleave(torch.from_numpy(z), npts, dim=0)
 
     # Global NRE posterior
-    prior = np.linspace(lower_bound, upper_bound, npts).reshape(npts, 1)
+    prior = np.linspace(lower_bound + 1, higher_bound - 1, npts).reshape(npts, 1)
     prior_tile = np.tile(prior, (nsamp, 1))
     prior = prior.flatten()
 
-    dataset_test = torch.utils.data.TensorDataset(data, torch.from_numpy(prior_tile), z_rep)
+    dataset_test = torch.utils.data.TensorDataset(samples_rep, torch.from_numpy(prior_tile), z_rep)
     dataloader = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size)
     post = []
-    for x1, x2, x3 in dataloader:
-        preds = r_estimator(model, x1, x2, x3)
+    for samp, H0, shift in dataloader:
+        preds = r_estimator(model, samp, H0, shift)
         post.extend(preds)
 
     post = np.asarray(post).reshape(nsamp, npts)

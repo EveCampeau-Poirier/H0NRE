@@ -19,7 +19,6 @@ from scipy.ndimage import interpolation
 # Astropy
 from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import c
-from astropy import units as u
 
 
 # --------------------------------- FUNCTIONS ----------------------------------
@@ -714,9 +713,9 @@ class training_set(object):
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = np.random.uniform(-.3, .3)  # -.05
+            x0_lens = np.random.uniform(-.8, .8)  # -.05
             # Lens y coordinate (arcsec)
-            y0_lens = np.random.uniform(-.3, .3)  # .02
+            y0_lens = np.random.uniform(-.8, .8)  # .02
             # Lens ellipticity
             ellip = np.random.uniform(.3, .99)  # .7
             # Lens inclination (rad)

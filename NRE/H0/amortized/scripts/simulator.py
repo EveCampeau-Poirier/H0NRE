@@ -713,9 +713,9 @@ class training_set(object):
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = np.random.uniform(-.8, .8)  # -.05
+            x0_lens = np.random.uniform(-.4, .4)  # -.05
             # Lens y coordinate (arcsec)
-            y0_lens = np.random.uniform(-.8, .8)  # .02
+            y0_lens = np.random.uniform(-.4, .4)  # .02
             # Lens ellipticity
             ellip = np.random.uniform(.3, .99)  # .7
             # Lens inclination (rad)
@@ -732,7 +732,7 @@ class training_set(object):
             ### Gaussian host galaxy
             # Host galaxy magnitude (AB system)
             # m_host=np.random.uniform(25,20)
-            m_host = 22.5
+            m_host = 21.25
             # Host galaxy extent (arcsec)
             # sig_host=np.random.uniform(.15,.35)
             sig_host = .15  # .25
@@ -746,7 +746,7 @@ class training_set(object):
             ### Active Galactic Nuclei (point source)
             # AGN magnitude (AB system)
             # m_AGN=np.random.uniform(22.5,20)
-            m_AGN = 21.25
+            m_AGN = 21
             # AGN x coordinate (arcsec)
             # x0_AGN = x0_host + np.random.uniform(-.25*sig_host,.25*sig_host)
             x0_AGN = 0  # -.31875

@@ -18,10 +18,7 @@ c = c.to('Mpc/d')  # Speed of light
 import torch
 from torch.nn.utils import clip_grad_norm_
 from torch import autograd
-from torchquad import Simpson, set_up_backend
 
-if torch.cuda.is_available():
-    set_up_backend("torch")
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 torch.manual_seed(0)
 np.random.seed(0)
@@ -36,7 +33,7 @@ def norm(x, y):
 
 # ROTATION MATRIX
 def mtx_rot(phi):
-    mtx = torch.zeros(phi.shape[0], 1, 2, 2)
+    mtx = torch.zeros((phi.shape[0], 1, 2, 2), device=phi.device)
     mtx[:, 0, 0, 0] = torch.cos(phi)
     mtx[:, 0, 0, 1] = -torch.sin(phi)
     mtx[:, 0, 1, 0] = torch.sin(phi)
@@ -59,14 +56,14 @@ def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_
     Also outputs the Fermat potential at these positions"""
 
     # Parameters
-    x0_AGN = 3e-6 * torch.randn((x0_lens.size(0)))
-    y0_AGN = 3e-6 * torch.randn((y0_lens.size(0)))
+    x0_AGN = 3e-6 * torch.randn((x0_lens.size(0)), device=x0_lens.device)
+    y0_AGN = 3e-6 * torch.randn((y0_lens.size(0)), device=y0_lens.device)
     theta_E = theta_E.unsqueeze(1)
     f = ellip.unsqueeze(1)
-    f_prime = np.sqrt(1 - f ** 2)
+    f_prime = torch.sqrt(1 - f ** 2)
 
     # Image positions in the lens coordinate system
-    im_pos_trans = torch.zeros(xim_fov.shape[0], xim_fov.shape[1], 2, 1)
+    im_pos_trans = torch.zeros((xim_fov.shape[0], xim_fov.shape[1], 2, 1), device=xim_fov.device)
     im_pos_trans[:, :, 0, 0] = xim_fov - x0_lens.unsqueeze(1)
     im_pos_trans[:, :, 1, 0] = yim_fov - y0_lens.unsqueeze(1)
     im_pos_lens = torch.matmul(mtx_rot(-phi), im_pos_trans).squeeze(3)
@@ -74,7 +71,7 @@ def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_
     r_im, phi_im = cart2pol(yim, xim)
 
     # AGN positions in the lens coordinate system
-    src_pos_trans = torch.zeros(x0_lens.shape[0], 1, 2, 1)
+    src_pos_trans = torch.zeros((x0_lens.shape[0], 1, 2, 1), device=x0_lens.device)
     src_pos_trans[:, 0, 0, 0] = x0_AGN - x0_lens
     src_pos_trans[:, 0, 1, 0] = y0_AGN - y0_lens
     src_pos_lens = torch.matmul(mtx_rot(-phi), src_pos_trans).squeeze(3)
@@ -93,11 +90,11 @@ def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_
 
     # X deflection angle (eq. 27a Kormann et al. 1994)
     def alphax(varphi):
-        return theta_E * np.sqrt(f) / f_prime * torch.arcsin(f_prime * torch.sin(varphi))
+        return theta_E * torch.sqrt(f) / f_prime * torch.arcsin(f_prime * torch.sin(varphi))
 
     # Y deflection angle (eq. 27a Kormann et al. 1994)
     def alphay(varphi):
-        return theta_E * np.sqrt(f) / f_prime * torch.arcsinh(f_prime / f * torch.cos(varphi))
+        return theta_E * torch.sqrt(f) / f_prime * torch.arcsinh(f_prime / f * torch.cos(varphi))
 
     # Lens potential deviation from a SIS (Meneghetti, 19_2018, psi_tilde)
     def psi_tilde(varphi):
@@ -127,35 +124,43 @@ def get_Fermat_potentials(x0_lens, y0_lens, ellip, phi, theta_E, gamma_ext, phi_
     fermat_pot = geo_term - lens_term - shear_term
 
     fermat_pot = fermat_pot - torch.amin(fermat_pot, dim=1, keepdim=True)
-    fermat_pot = fermat_pot[fermat_pot != 0.].view(fermat_pot.shape[0], -1)
 
     return fermat_pot
 
 
 def doub_and_quad_potentials(nim, pos, param):
-    if torch.any(nim == 1):
-        idd = torch.where(nim == 1)
-        psd = pos[idd][:, :, :-2]
-        prd = param[idd]
-        potd = get_Fermat_potentials(prd[:, 0], prd[:, 1], prd[:, 2],
-                                     prd[:, 3], prd[:, 4], prd[:, 5],
-                                     prd[:, 6], psd[:, 0], psd[:, 1])
-        potd = torch.cat((potd, -torch.ones((potd.shape[0], 2), device=potd.device)), dim=1)
-        pot = potd
 
-    if torch.any(nim == 3):
-        idq = torch.where(nim == 3)
-        psq = pos[idq]
-        prq = param[idq]
-        potq = get_Fermat_potentials(prq[:, 0], prq[:, 1], prq[:, 2],
-                                     prq[:, 3], prq[:, 4], prq[:, 5],
-                                     prq[:, 6], psq[:, 0], psq[:, 1])
-        pot = potq
+    pot = torch.tensor([[0], [0], [1]], device=pos.device)
+    while torch.count_nonzero(pot) != pot.shape[0] * (pot.shape[1] - 1):
 
-    if torch.any(nim == 1) and torch.any(nim == 3):
-        pot = torch.ones((pos.shape[0], 3), device=potd.device)
-        pot[idd] = potd
-        pot[idq] = potq
+        param = param_noise(param)
+        pos = pos_noise(pos)
+
+        if torch.any(nim == 1):
+            idd = torch.where(nim == 1)
+            psd = pos[idd][:, :, :-2]
+            prd = param[idd]
+            potd = get_Fermat_potentials(prd[:, 0], prd[:, 1], prd[:, 2],
+                                         prd[:, 3], prd[:, 4], prd[:, 5],
+                                         prd[:, 6], psd[:, 0], psd[:, 1])
+            potd = torch.cat((potd, -torch.ones((potd.shape[0], 2), device=potd.device)), dim=1)
+            pot = potd
+
+        if torch.any(nim == 3):
+            idq = torch.where(nim == 3)
+            psq = pos[idq]
+            prq = param[idq]
+            potq = get_Fermat_potentials(prq[:, 0], prq[:, 1], prq[:, 2],
+                                         prq[:, 3], prq[:, 4], prq[:, 5],
+                                         prq[:, 6], psq[:, 0], psq[:, 1])
+            pot = potq
+
+        if torch.any(nim == 1) and torch.any(nim == 3):
+            pot = torch.ones((pos.shape[0], 4), device=potd.device)
+            pot[idd] = potd
+            pot[idq] = potq
+
+    pot = pot[pot != 0.].view(pot.shape[0], -1)
 
     return pot
 
@@ -169,12 +174,12 @@ def dt_noise(dt, sig=.35):
         noisy_data : (tensor)[batch_size x 4 x 2] noisy time delays + true Fermat potential
     """
     mask = torch.where(dt > 0, 1, 0)
-    noisy_dt = dt + sig * torch.randn((dt.size(0), dt.size(1))) * mask
+    noisy_dt = dt + sig * torch.randn((dt.size(0), dt.size(1)), device=dt.device) * mask
 
     return noisy_dt
 
 
-def param_noise(param, sig=torch.tensor([4e-6, 4e-6, 1e-7, 4e-6, 4e-6, 4e-6, 4e-6])):
+def param_noise(param, sig=[4e-6, 4e-6, 1e-7, 4e-6, 4e-6, 4e-6, 4e-6]):
     """
     Adds noise to the parameters
     Inputs
@@ -182,11 +187,12 @@ def param_noise(param, sig=torch.tensor([4e-6, 4e-6, 1e-7, 4e-6, 4e-6, 4e-6, 4e-
     Outputs
         noisy_param : (tensor)[batch_size x 7] noisy param
     """
-    noisy_param = param + sig[None, :] * torch.randn((param.size(0), param.size(1)))
+    sig = torch.tensor(sig, device=param.device)
+    noisy_param = param + sig[None, :] * torch.randn((param.size(0), param.size(1)), device=param.device)
     while torch.any(noisy_param[:, 2] >= 1):
         idx = torch.where(noisy_param[:, 2] >= 1)
         for i in idx[0]:
-            new_noise = sig[2] * torch.randn((1))
+            new_noise = sig[2] * torch.randn((1), device=param.device)
             noisy_param[i, 2] = param[i, 2] + new_noise
 
     return noisy_param
@@ -200,7 +206,7 @@ def pos_noise(pos, sig=4e-6):
         Outputs
             noisy_pos : (tensor)[batch_size x 2 x 4] noisy param
         """
-    noisy_pos = pos + sig * torch.randn((pos.size(0), pos.size(1), pos.size(2)))
+    noisy_pos = pos + sig * torch.randn((pos.size(0), pos.size(1), pos.size(2)), device=pos.device)
 
     return noisy_pos
 
@@ -320,9 +326,9 @@ def split_data(file, path_in):
     if not os.path.isfile(path_in + '/keys.hdf5'):
         # os.remove(path_in+'/keys.hdf5')
         keys_file = h5py.File(path_in + '/keys.hdf5', 'a')
-        train_ids = keys_file.create_dataset("train", train_keys.shape, dtype='i')
-        valid_ids = keys_file.create_dataset("valid", valid_keys.shape, dtype='i')
-        test_ids = keys_file.create_dataset("test", test_keys.shape, dtype='i')
+        train_ids = keys_file.create_dataset("train", tr_k.shape, dtype='i')
+        valid_ids = keys_file.create_dataset("valid", vl_k.shape, dtype='i')
+        test_ids = keys_file.create_dataset("test", ts_k.shape, dtype='i')
         train_ids[:] = tr_k
         valid_ids[:] = vl_k
         test_ids[:] = ts_k
@@ -411,24 +417,25 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
             # loop on batches
             for dt, H0, z, param, pos in dataloader:
 
+                dt = dt.to(device, non_blocking=True).float()
+                H0 = H0.to(device, non_blocking=True).float()
+                z = z.to(device, non_blocking=True).float()
+                param = param.to(device, non_blocking=True).float()
+                pos = pos.to(device, non_blocking=True).float()
+
                 dt = dt_noise(dt)
-                param = param_noise(param)
-                pos = pos_noise(pos)
                 nim = torch.count_nonzero(dt + 1, dim=1)
                 pot = doub_and_quad_potentials(nim, pos, param)
                 sm = torch.cat((dt[:, :, None], pot[:, :, None]), dim=2)
-                sm = sm.to(device, non_blocking=True).float()
 
                 half_batch_size = int(dt.shape[0] / 2)
 
                 sma = sm[:half_batch_size]
-                smbb = sm[half_batch_size:]
+                smb = sm[half_batch_size:]
 
-                H0 = H0.to(device, non_blocking=True).float()
                 H0a = H0[:half_batch_size]
                 H0b = H0[half_batch_size:]
 
-                z = z.to(device, non_blocking=True).float()
                 za = z[:half_batch_size]
                 zb = z[half_batch_size:]
 
@@ -514,7 +521,7 @@ def train_fn(model, file, path_in, path_out, optimizer, loss_fn, acc_fn, thresho
                 valid_acc[epoch, :] = epoch_acc.detach().cpu().numpy()
 
         # Keeping track of the model
-        if epoch % int(epochs / 10) == 0:
+        if epoch % int(epochs / 25) == 0:
             torch.save(model, path_out + f'/models/model{epoch:02d}.pt')
 
     # Closing file
@@ -610,12 +617,10 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
     dataset.close()
 
     nsamp = truths.shape[0]
-    dt = dt[dt != 0].reshape(nsamp, 3, 2)
+    dt = dt[dt != 0].reshape(nsamp, 3)
     noisy_dt = dt_noise(torch.from_numpy(dt))
-    noisy_param = param_noise(torch.from_numpy(param))
-    noisy_pos = pos_noise(torch.from_numpy(pos))
     nim = torch.count_nonzero(noisy_dt + 1, dim=1)
-    pot = doub_and_quad_potentials(nim, noisy_pos, noisy_param)
+    pot = doub_and_quad_potentials(nim, torch.from_numpy(pos), torch.from_numpy(param))
     samples = torch.cat((noisy_dt[:, :, None], pot[:, :, None]), dim=2)
 
     # observations
@@ -672,12 +677,12 @@ def inference(file_keys, file_data, file_model, path_out, nrow=10, ncol=5, npts=
 
     NRE = post_file.create_group("NRE_global")
     H0 = NRE.create_dataset("Hubble_cst", (npts,), dtype='f')
-    post = NRE.create_dataset("posterior", (nsamp, npts), dtype='f')
+    pstr = NRE.create_dataset("posterior", (nsamp, npts), dtype='f')
 
     truth_set = post_file.create_dataset("truth", (nsamp,), dtype='f')
 
     H0[:] = prior
-    post[:, :] = post
+    pstr[:, :] = post
     truth_set[:] = truths
 
     post_file.close()
@@ -747,12 +752,10 @@ def joint_inference(file_data, file_model, path_out, npts=50000, lower_bound=65.
 
     true = float(np.unique(truths))
     nsamp = truths.shape[0]
-    dt = dt[dt != 0].reshape(nsamp, 3, 2)
+    dt = dt[dt != 0].reshape(nsamp, 3)
     noisy_dt = dt_noise(torch.from_numpy(dt))
-    noisy_param = param_noise(torch.from_numpy(param))
-    noisy_pos = pos_noise(torch.from_numpy(pos))
     nim = torch.count_nonzero(noisy_dt + 1, dim=1)
-    pot = doub_and_quad_potentials(nim, noisy_pos, noisy_param)
+    pot = doub_and_quad_potentials(nim, torch.from_numpy(pos), torch.from_numpy(param))
     samples = torch.cat((noisy_dt[:, :, None], pot[:, :, None]), dim=2)
 
     # observations

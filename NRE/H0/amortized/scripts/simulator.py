@@ -237,8 +237,8 @@ class training_set(object):
 
         # Parameters
         gamma_ext, phi_ext = param[5:7]
-        gamma1 = gamma_ext * np.cos(phi_ext)
-        gamma2 = gamma_ext * np.sin(phi_ext)
+        gamma1 = gamma_ext * np.cos(2*phi_ext)
+        gamma2 = gamma_ext * np.sin(2*phi_ext)
         # Shear matrix
         ext_shear = np.array([[gamma1, gamma2],
                               [gamma2, -gamma1]])
@@ -273,6 +273,7 @@ class training_set(object):
     def fig_host(self, host, param):
 
         m_host, sig_host, x0_host, y0_host = param[7:11]
+        x0_AGN, y0_AGN = param[-2:]
 
         plt.figure()
         plt.imshow(host, extent=[-self.dim / 2, self.dim / 2, -self.dim / 2, self.dim / 2],
@@ -285,6 +286,7 @@ class training_set(object):
         cbar.set_label(r'CPS', rotation=270, fontsize=10,
                        labelpad=15)
         plt.clim(np.min(host), np.max(host))
+        plt.text(x0_AGN, y0_AGN, "x", weight="bold")
 
     # ---------------------------------- Image ------------------------------------
 
@@ -713,9 +715,9 @@ class training_set(object):
 
             ### Lens (SIE)
             # Lens x coordinate (arcsec)
-            x0_lens = np.random.uniform(-.4, .4)  # -.05
+            x0_lens = np.random.uniform(-.3, .3)  # -.05
             # Lens y coordinate (arcsec)
-            y0_lens = np.random.uniform(-.4, .4)  # .02
+            y0_lens = np.random.uniform(-.3, .3)  # .02
             # Lens ellipticity
             ellip = np.random.uniform(.3, .99)  # .7
             # Lens inclination (rad)
@@ -732,10 +734,10 @@ class training_set(object):
             ### Gaussian host galaxy
             # Host galaxy magnitude (AB system)
             # m_host=np.random.uniform(25,20)
-            m_host = 21.25
+            m_host = 21.3
             # Host galaxy extent (arcsec)
             # sig_host=np.random.uniform(.15,.35)
-            sig_host = .15  # .25
+            sig_host = .25  # .25
             # Host x coordinate (arcsec)
             # x0_host=np.random.uniform(-.7,.7)
             x0_host = -.03125  # -.35
@@ -746,7 +748,7 @@ class training_set(object):
             ### Active Galactic Nuclei (point source)
             # AGN magnitude (AB system)
             # m_AGN=np.random.uniform(22.5,20)
-            m_AGN = 21
+            m_AGN = 21.25
             # AGN x coordinate (arcsec)
             # x0_AGN = x0_host + np.random.uniform(-.25*sig_host,.25*sig_host)
             x0_AGN = 0  # -.31875
@@ -799,35 +801,36 @@ class training_set(object):
             if fig[0]:
                 self.fig_kappa(kappa_map, param, test, )
                 if savefig[0]:
-                    plt.savefig(self.path + "kappa{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "kappa{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[1]:
                 self.fig_alpha(alpha, param)
                 if savefig[1]:
-                    plt.savefig(self.path + "alpha_ana{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "alpha_ana{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[2]:
                 self.fig_alpha(alpha, param)
                 if savefig[2]:
-                    plt.savefig(self.path + "alpha_conv{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "alpha_conv{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[3]:
                 self.fig_host(host, param)
                 if savefig[3]:
-                    plt.savefig(self.path + "host{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "host{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[4]:
                 self.fig_image(im_host, param)
                 if savefig[4]:
-                    plt.savefig(self.path + "im_host{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "im_host{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[5]:
                 self.fig_image(im_psf, param)
                 if savefig[5]:
-                    plt.savefig(self.path + "host_psf{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "host_psf{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[6]:
                 self.fig_AGN(im_AGN, param)
                 if savefig[6]:
-                    plt.savefig(self.path + "im_AGN{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "im_AGN{}.png".format(it), dpi=200, bbox_inches='tight')
             if fig[7]:
                 self.fig_total(im, param)
                 if savefig[7]:
-                    plt.savefig(self.path + "im{}.png".format(it), dpi=600, bbox_inches='tight')
+                    plt.savefig(self.path + "im{}.png".format(it), dpi=200, bbox_inches='tight')
+                    plt.imsave(self.path + "obs{}.png".format(it), im, cmap="hot")
 
             # Saving
             if save:

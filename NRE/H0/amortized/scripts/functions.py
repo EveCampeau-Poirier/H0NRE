@@ -732,8 +732,8 @@ def inference(path_data, file_model, path_out, nrow=10, ncol=5, npts=5000, batch
 
     # divide doubles and quads
     bins, coverage_all, mean_all, std_all = coverage_diagnostic(post, prior, truths)
-    idd = torch.where(nim == 1).detach().cpu().numpy()
-    idq = torch.where(nim == 3).detach().cpu().numpy()
+    idd = torch.where(nim == 1)[0].detach().cpu().numpy()
+    idq = torch.where(nim == 3)[0].detach().cpu().numpy()
     _, coverage_doubs, mean_doubs, std_doubs = coverage_diagnostic(post[idd], prior, truths[idd])
     _, coverage_quads, mean_quads, std_quads = coverage_diagnostic(post[idq], prior, truths[idq])
 
@@ -744,7 +744,7 @@ def inference(path_data, file_model, path_out, nrow=10, ncol=5, npts=5000, batch
     axes.plot(bins, coverage_quads, '-.', color='C4', label="Quads")
     axes.fill_between(bins, mean_quads - std_quads / 2, mean_quads + std_quads / 2, alpha=.3, color="C4")
     axes.plot(bins, coverage_all, '--', color='C5', label="All")
-    axes.fill_between(bins, mean_all - std_all / 2, mean_all + std_all / 2, alpha=.3, color="C3")
+    axes.fill_between(bins, mean_all - std_all / 2, mean_all + std_all / 2, alpha=.3, color="C5")
     axes.xlabel("Highest probability density region")
     axes.ylabel("Fraction of truths within")
     axes.text(0., .9, "Underconfident")  # , fontsize='large')
